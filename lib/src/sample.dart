@@ -90,6 +90,18 @@ Object sample({
     fireTarget(sink, out);
   }
 
-  subscribeClock(effectiveClock, run);
+  final clockSub = subscribeClock(effectiveClock, run);
+  // Every sink here is a Unit (Store/Event/Effect); attach the clock
+  // subscription so it's torn down automatically when the sink is disposed,
+  // instead of living forever with nothing able to reach it. (A `target:
+  // [a, b]` list isn't itself a Unit — attach to each element instead so
+  // disposing *any* of them releases this link.)
+  if (sink is Unit) {
+    sink.attachLinks([clockSub]);
+  } else if (sink is List) {
+    for (final t in sink) {
+      if (t is Unit) t.attachLinks([clockSub]);
+    }
+  }
   return target ?? createdEvent!;
 }

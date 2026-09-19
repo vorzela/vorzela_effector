@@ -157,4 +157,88 @@ void main() {
     $s.dispose();
     expect(() => $s.watch((_) {}), throwsStateError);
   });
+
+  test('scope.setState does not mutate global store', () {
+    final $s = createStore(0);
+    final scope = fork();
+    scope.setState($s, 99);
+    expect(scope.getState($s), 99);
+    expect($s.getState(), 0);
+  });
+
+  test('sample link is torn down when target is disposed', () {
+    final clock = createEvent();
+    final target = createEventTyped<int>();
+    final seen = <int>[];
+    target.to(seen.add);
+
+    sample(
+      clock: clock,
+      source: createStore(7),
+      fn: (s, _) => s as int,
+      target: target,
+    );
+
+    clock();
+    expect(seen, [7]);
+    target.dispose();
+    clock();
+    expect(seen, [7]);
+  });
+
+  test('overlapping effects clear \$pending when stale call finishes last',
+      () async {
+    final fx = createEffect<int, int>((n) async {
+      await Future<void>.delayed(Duration(milliseconds: n));
+      return n;
+    });
+
+    final slow = fx(40);
+    final fast = fx(5);
+    await fast;
+    await slow;
+    expect(fx.$pending.getState(), isFalse);
+  });
+
+  test('combine recomputes once per batch', () {
+    final $a = createStore(1);
+    final $b = createStore(2);
+    final setA = createEventTyped<int>();
+    final setB = createEventTyped<int>();
+    $a.on(setA, (_, v) => v);
+    $b.on(setB, (_, v) => v);
+
+    var computes = 0;
+    final $sum = combine([$a, $b], (vals) {
+      computes++;
+      return (vals[0] as int) + (vals[1] as int);
+    });
+
+    expect($sum.getState(), 3);
+    final baseline = computes;
+
+    Kernel.instance.batch(() {
+      setA(10);
+      setB(20);
+    });
+
+    expect($sum.getState(), 30);
+    expect(computes - baseline, 1);
+  });
+
+  test('unsubscribe is identity-based for duplicate listeners', () {
+    final $s = createStore(0);
+    final set = createEventTyped<int>();
+    $s.on(set, (_, v) => v);
+
+    void listener(int _) {}
+    final a = $s.watch(listener);
+    final b = $s.watch(listener);
+    expect($s.subscriberCount, 2);
+    a.unsubscribe();
+    expect($s.subscriberCount, 1);
+    b.unsubscribe();
+    expect($s.subscriberCount, 0);
+  });
 }
+

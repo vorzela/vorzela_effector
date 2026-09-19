@@ -63,10 +63,18 @@ final class Effect<P, D> extends Unit with Subscribable<P> {
     });
 
     return Future.sync(() => _handler(params)).then((result) {
+      // Every completed call must release its inflight slot, even when its
+      // generation is stale — otherwise a call that started before an
+      // abort()/newer call finishes *after* it and its slot never gets
+      // released, leaving $pending stuck at `true` forever even though
+      // nothing is actually running anymore.
+      _inflight = (_inflight - 1).clamp(0, 1 << 30);
       if (gen != _generation || _aborted || isDisposed) {
+        if (!isDisposed) {
+          Kernel.instance.batch(() => $pending.write(_inflight > 0));
+        }
         return result;
       }
-      _inflight = (_inflight - 1).clamp(0, 1 << 30);
       Kernel.instance.batch(() {
         done(EffectDone(params: params, result: result));
         finally_(params);
@@ -74,10 +82,13 @@ final class Effect<P, D> extends Unit with Subscribable<P> {
       });
       return result;
     }, onError: (Object e, StackTrace st) {
+      _inflight = (_inflight - 1).clamp(0, 1 << 30);
       if (gen != _generation || _aborted || isDisposed) {
+        if (!isDisposed) {
+          Kernel.instance.batch(() => $pending.write(_inflight > 0));
+        }
         return Future<D>.error(e, st);
       }
-      _inflight = (_inflight - 1).clamp(0, 1 << 30);
       Kernel.instance.batch(() {
         fail(EffectFail(params: params, error: e));
         finally_(params);

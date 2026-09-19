@@ -19,10 +19,16 @@ final class Scope {
     return store.getState();
   }
 
+  /// Write into this scope's own snapshot **only**. The whole point of
+  /// [fork] is an isolated copy of state; previously this also called
+  /// `store.write(value)`, which mutated the real global store, so every
+  /// fork silently leaked into (and stomped on) global state and every
+  /// other scope. Note this means values set here are only visible via
+  /// this scope's [getState] / [scopeBind] — not through `store.getState()`
+  /// or `UnitBuilder`, which read the global store directly.
   void setState<T>(Store<T> store, T value) {
     if (_disposed) throw StateError('Scope disposed');
     _values[store] = value;
-    store.write(value);
   }
 
   void own(Unit unit) => _owned.add(unit);

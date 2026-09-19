@@ -1,5 +1,4 @@
 import 'event.dart';
-import 'kernel.dart';
 import 'unit.dart';
 
 typedef Reducer<T, P> = T Function(T state, P payload);
@@ -18,7 +17,6 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
   T _state;
   final bool _derived;
   final UpdateFilter<T>? updateFilter;
-  final List<Subscription> _links = [];
 
   T getState() => _state;
 
@@ -36,7 +34,7 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
       final next = reducer(_state, payload);
       _set(next);
     });
-    _links.add(sub);
+    attachLinks([sub]);
     return this;
   }
 
@@ -45,7 +43,7 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     if (_derived) throw StateError('Cannot reset a derived store');
     final target = to ?? _state;
     final sub = clock.to((_) => _set(target));
-    _links.add(sub);
+    attachLinks([sub]);
     return this;
   }
 
@@ -79,22 +77,8 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
       updateFilter: updateFilter,
       derived: true,
     );
-    final sub = watch((v) => derived.writeDerived(fn(v)));
-    derived._links.add(sub);
+    derived.attachLinks([watch((v) => derived.writeDerived(fn(v)))]);
     return derived;
-  }
-
-  void attachLinks(List<Subscription> links) {
-    _links.addAll(links);
-  }
-
-  @override
-  void onDispose() {
-    for (final l in _links) {
-      l.unsubscribe();
-    }
-    _links.clear();
-    super.onDispose();
   }
 }
 
