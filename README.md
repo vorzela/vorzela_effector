@@ -56,14 +56,57 @@ class CounterPage extends StatelessWidget {
 
 ---
 
-## Text fields — auto-disposed controllers
+## Controllers & dispose (why this exists)
 
-### `AutoDispose` (own any `TextEditingController`)
+Flutter objects like `TextEditingController`, `FocusNode`, `ScrollController`,
+`PageController`, `AnimationController`, and `TabController` **must** be
+`dispose()`d or they leak memory and keep listeners alive (jank over time).
+
+Normally that means a `StatefulWidget` + fields + `dispose()`.  
+**vorzela_effector** gives you a `Life` bag that creates each resource **once**
+and disposes it when the widget leaves the tree — Stateless or Stateful.
+
+### Which API should I use?
+
+| What you need | Use this |
+|---------------|----------|
+| One text field ↔ `Store<String>` | **`StoreTextField`** (zero layout boilerplate) |
+| Custom form layout, StatelessWidget | **`AutoDispose`** + `life.bindText` / controllers |
+| Animations / `TabController` (`vsync`) | **`StatefulWidget` + `AutoDisposeMixin`** |
+| Rebuild UI from a store only | **`UnitBuilder`** (no controllers) |
+
+---
+
+### 1) Easiest — `StoreTextField`
+
+Wire the store + event once; the widget owns the controller.
 
 ```dart
-final nameChanged = createEventTyped<String>();
+final $email = createStore('');
+final setEmail = createEventTyped<String>();
+$email.on(setEmail, (_, v) => v);
+
+// Pass the event directly (no .call needed):
+StoreTextField(
+  store: $email,
+  event: setEmail,
+  decoration: const InputDecoration(labelText: 'Email'),
+);
+```
+
+Typing updates `$email`. `setEmail('')` clears the field. Controller is disposed automatically.
+
+---
+
+### 2) Stateless form — `AutoDispose` + `Life`
+
+`Life` is the bag of resources. Factories are **stable across rebuilds**
+(same call order → same instance). No junk controllers on every frame.
+
+```dart
 final $name = createStore('');
-$name.on(nameChanged, (_, v) => v);
+final setName = createEventTyped<String>();
+$name.on(setName, (_, v) => v);
 
 class NameForm extends StatelessWidget {
   const NameForm({super.key});
@@ -71,16 +114,14 @@ class NameForm extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AutoDispose(
-      builder: (context, d) {
-        // Disposed automatically when NameForm leaves the tree —
-        // no State.dispose() boilerplate.
-        final name = d.textEditingController();
-        final focus = d.focusNode();
+      builder: (context, life) {
+        // Two-way bind in one line (controller + store sync + dispose).
+        final name = life.bindText($name, setName.call);
+        final focus = life.focusNode();
 
         return TextField(
           controller: name,
           focusNode: focus,
-          onChanged: (v) => nameChanged(v),
           decoration: const InputDecoration(labelText: 'Name'),
         );
       },
@@ -89,32 +130,71 @@ class NameForm extends StatelessWidget {
 }
 ```
 
-`AutoDisposeHandle` also provides:
+**`Life` factories (all auto-disposed):**
 
-- `textEditingController({text})`
-- `focusNode({debugLabel})`
-- `scrollController({initialScrollOffset})`
-- `manage(value, dispose)` / `own(Disposable)`
-- `watchStore(store, onChange)`
-
-### `StoreTextField` (two-way bind to `Store<String>`)
-
-```dart
-final $email = createStore('');
-final setEmail = createEventTyped<String>();
-$email.on(setEmail, (_, v) => v);
-
-StoreTextField(
-  store: $email,
-  onChanged: setEmail.call,
-  decoration: const InputDecoration(labelText: 'Email'),
-  keyboardType: TextInputType.emailAddress,
-);
-```
-
-Typing updates the store via `onChanged`. Resetting the store (e.g. `setEmail('')`) rewrites the field. The internal `TextEditingController` is disposed with the widget.
+| Method | Creates |
+|--------|---------|
+| `bindText(store, onChanged)` | `TextEditingController` synced to store |
+| `textEditingController({text})` | plain `TextEditingController` |
+| `focusNode({debugLabel})` | `FocusNode` |
+| `scrollController(…)` | `ScrollController` |
+| `pageController(…)` | `PageController` |
+| `animationController(vsync: …)` | `AnimationController` (needs mixin/`vsync`) |
+| `tabController(vsync:, length:)` | `TabController` |
+| `valueNotifier(initial)` | `ValueNotifier` |
+| `use(create, dispose)` | any custom resource (once) |
+| `watch(store, onChange)` | one subscription (safe in `build`) |
 
 ---
+
+### 3) Stateful + animations — `AutoDisposeMixin`
+
+Keep `StatefulWidget` when you need `vsync` (or other State APIs).  
+Mixin still kills controllers / store watches for you.
+
+```dart
+class FadeCounter extends StatefulWidget {
+  const FadeCounter({super.key});
+  @override
+  State<FadeCounter> createState() => _FadeCounterState();
+}
+
+class _FadeCounterState extends State<FadeCounter>
+    with SingleTickerProviderStateMixin, AutoDisposeMixin {
+  @override
+  Widget build(BuildContext context) {
+    // buildWithLife resets call-order every frame (no stacked listeners).
+    return buildWithLife((life) {
+      final anim = life.animationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 300),
+      );
+      final count = life.watch($count, (_) => setState(() {}));
+
+      return FadeTransition(
+        opacity: anim.drive(Tween(begin: 0.5, end: 1.0)),
+        child: Text('$count'),
+      );
+    });
+  }
+}
+```
+
+You can still mix: `UnitBuilder` for store UI + normal `State` for animation only.
+
+---
+
+### Performance rules (avoid junk)
+
+1. **Controllers are created once** — `Life` memoizes by call order; rebuilds reuse them.
+2. **`life.watch` / `bindText` subscribe once** — safe in `build`; will not stack listeners.
+3. **Keep `UnitBuilder` / `AutoDispose` small** — rebuild only the subtree that needs the value, not the whole page.
+4. **Prefer one store per `UnitBuilder`** over a giant `MultiUnitBuilder` when fields update independently.
+5. **Dispose on route leave** — `AutoDispose` / mixin do this; never keep a `Life` in a global singleton.
+6. **Animations stay on StatefulWidget** — `vsync` requires a `TickerProvider`; that is intentional and cheap.
+
+---
+
 
 ## Effector API map
 
@@ -221,14 +301,12 @@ Typing updates the store via `onChanged`. Resetting the store (e.g. `setEmail(''
 | `UnitBuilder<T>(unit, builder)` | Rebuild on store change; unsub on dispose |
 | `MultiUnitBuilder(units, builder)` | Rebuild when any store changes |
 | `GateScope<T>(gate, props, child)` | `open` on mount, `close` on dispose |
-| `AutoDispose(builder)` | Builder with `AutoDisposeHandle` |
-| `AutoDisposeHandle.textEditingController` | Auto-disposed `TextEditingController` |
-| `AutoDisposeHandle.focusNode` | Auto-disposed `FocusNode` |
-| `AutoDisposeHandle.scrollController` | Auto-disposed `ScrollController` |
-| `AutoDisposeHandle.manage` / `own` | Register custom disposables |
-| `AutoDisposeHandle.watchStore` | Subscription cleared on dispose |
-| `StoreTextField` | Two-way `Store<String>` ↔ field |
-| `UnitHook` | Manual sub list for custom `State` |
+| `Life` | Resource bag (controllers + watches); alias `AutoDisposeHandle` |
+| `AutoDispose(builder)` | Stateless wrapper that owns a `Life` |
+| `AutoDisposeMixin` | Stateful mixin; use `buildWithLife` |
+| `Life.bindText` / controllers / `watch` / `use` | See “Controllers & dispose” above |
+| `StoreTextField` | Ready-made field; `event:` or `onChanged:` |
+| `UnitHook` | Manual subs — `initState` only |
 | `Disposable` / `DisposableRef` | Dispose protocol |
 
 ---
@@ -260,7 +338,7 @@ sample(
 
 ---
 
-## Performance
+## Performance (core graph)
 
 - Per-store subscriber lists
 - Nested updates batch into one flush
@@ -274,6 +352,11 @@ onPressed: () => save($form.getState()); // racey
 ```
 
 Prefer `sample` or event payloads.
+
+```dart
+// Never subscribe in build without Life memoization:
+store.watch((_) => setState(() {})); // stacks a listener every frame → jank
+```
 
 ---
 

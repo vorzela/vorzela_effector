@@ -151,8 +151,8 @@ class _GateScopeState<T> extends State<GateScope<T>> {
   Widget build(BuildContext context) => widget.child;
 }
 
-/// Hook-style helpers for use inside a [StatefulWidget] that owns subscriptions.
-/// Prefer [UnitBuilder] / [AutoDispose] for StatelessWidget trees.
+/// Thin subscription list for custom [State] code.
+/// Call only from `initState` (not every build) — prefer [AutoDisposeMixin].
 final class UnitHook {
   UnitHook();
 

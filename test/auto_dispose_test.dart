@@ -10,8 +10,8 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AutoDispose(
-            builder: (context, d) {
-              captured = d.textEditingController(text: 'hi');
+            builder: (context, life) {
+              captured = life.textEditingController(text: 'hi');
               return TextField(controller: captured);
             },
           ),
@@ -19,18 +19,13 @@ void main() {
       ),
     );
 
-    expect(captured, isNotNull);
     expect(captured!.text, 'hi');
-
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
-
-    // ChangeNotifier throws once disposed.
     expect(() => captured!.addListener(() {}), throwsFlutterError);
   });
 
-  testWidgets('AutoDispose keeps same controller across rebuilds',
-      (tester) async {
+  testWidgets('Life keeps same controller across rebuilds', (tester) async {
     TextEditingController? first;
     TextEditingController? second;
     var tick = 0;
@@ -41,8 +36,8 @@ void main() {
           body: StatefulBuilder(
             builder: (context, setState) {
               return AutoDispose(
-                builder: (context, d) {
-                  final c = d.textEditingController(text: 'x');
+                builder: (context, life) {
+                  final c = life.textEditingController(text: 'x');
                   if (tick == 0) {
                     first = c;
                   } else {
@@ -67,23 +62,36 @@ void main() {
 
     await tester.tap(find.text('rebuild'));
     await tester.pump();
-
     expect(identical(first, second), isTrue);
   });
 
-  testWidgets('StoreTextField syncs store and auto-disposes controller',
+  testWidgets('bindText syncs store without stacking subscribers',
       (tester) async {
     final $name = createStore('');
     final setName = createEventTyped<String>();
     $name.on(setName, (_, v) => v);
 
+    var tick = 0;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: StoreTextField(
-            store: $name,
-            onChanged: setName.call,
-            decoration: const InputDecoration(labelText: 'Name'),
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              return AutoDispose(
+                builder: (context, life) {
+                  final c = life.bindText($name, setName.call);
+                  return Column(
+                    children: [
+                      TextField(controller: c),
+                      TextButton(
+                        onPressed: () => setState(() => tick++),
+                        child: Text('rebuild $tick'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
           ),
         ),
       ),
@@ -92,6 +100,12 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Ada');
     await tester.pump();
     expect($name.getState(), 'Ada');
+    // One bindText subscription only (plus nothing stacked on rebuild).
+    expect($name.subscriberCount, 1);
+
+    await tester.tap(find.text('rebuild 0'));
+    await tester.pump();
+    expect($name.subscriberCount, 1);
 
     setName('Bob');
     await tester.pump();
@@ -101,4 +115,71 @@ void main() {
     await tester.pump();
     expect($name.subscriberCount, 0);
   });
+
+  testWidgets('StoreTextField accepts event shorthand', (tester) async {
+    final $email = createStore('');
+    final setEmail = createEventTyped<String>();
+    $email.on(setEmail, (_, v) => v);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StoreTextField(
+            store: $email,
+            event: setEmail,
+            decoration: const InputDecoration(labelText: 'Email'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField), 'a@b.c');
+    await tester.pump();
+    expect($email.getState(), 'a@b.c');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect($email.subscriberCount, 0);
+  });
+
+  testWidgets('AutoDisposeMixin disposes AnimationController', (tester) async {
+    AnimationController? anim;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: _AnimProbe(onReady: (c) => anim = c),
+      ),
+    );
+    await tester.pump();
+    expect(anim, isNotNull);
+
+    // Unmount: AutoDisposeMixin must dispose the AnimationController before
+    // TickerProviderStateMixin, or Flutter asserts on leaked tickers.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+}
+
+class _AnimProbe extends StatefulWidget {
+  const _AnimProbe({required this.onReady});
+  final void Function(AnimationController c) onReady;
+
+  @override
+  State<_AnimProbe> createState() => _AnimProbeState();
+}
+
+class _AnimProbeState extends State<_AnimProbe>
+    with SingleTickerProviderStateMixin, AutoDisposeMixin {
+  @override
+  Widget build(BuildContext context) {
+    return buildWithLife((life) {
+      final c = life.animationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 100),
+      );
+      widget.onReady(c);
+      return const SizedBox.shrink();
+    });
+  }
 }
