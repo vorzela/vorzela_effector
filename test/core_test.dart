@@ -240,5 +240,36 @@ void main() {
     b.unsubscribe();
     expect($s.subscriberCount, 0);
   });
+
+  test('nested combine settles in the same flush', () {
+    final $a = createStore(1);
+    final setA = createEventTyped<int>();
+    $a.on(setA, (_, v) => v);
+
+    final $doubled = combine([$a], (vals) => (vals[0] as int) * 2);
+    final $plusOne = combine([$doubled], (vals) => (vals[0] as int) + 1);
+
+    setA(5);
+    // Without dirty re-drain, $plusOne would still be stale until next tick.
+    expect($doubled.getState(), 10);
+    expect($plusOne.getState(), 11);
+  });
+
+  test('kernel fails fast on runaway self-update loop', () {
+    final $s = createStore(0);
+    final bump = createEventTyped<int>();
+    $s.on(bump, (_, v) => v);
+    // Watcher writes the same store → unbounded dirty cascade.
+    final sub = $s.watch((v) {
+      if (v < 100000) bump(v + 1);
+    });
+
+    expect(() => bump(1), throwsStateError);
+    sub.unsubscribe();
+
+    // Kernel recovers for subsequent batches.
+    bump(0);
+    expect($s.getState(), 0);
+  });
 }
 

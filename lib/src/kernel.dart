@@ -14,6 +14,10 @@ final class Kernel {
 
   static final Kernel instance = Kernel._();
 
+  /// Max queue↔dirty cycles per [batch]. Catches accidental self-update loops
+  /// (a watcher writing the store it watches) without changing normal graphs.
+  static const int maxFlushPasses = 1000;
+
   bool _flushing = false;
   final Queue<VoidCallback> _queue = Queue<VoidCallback>();
   final Set<Object> _dirtyStores = {};
@@ -45,7 +49,16 @@ final class Kernel {
   /// empty so stores marked dirty *during* a dirty pass (combine → combine)
   /// still settle in the same tick.
   void _drain() {
+    var passes = 0;
     while (true) {
+      if (++passes > maxFlushPasses) {
+        throw StateError(
+          'Kernel flush exceeded $maxFlushPasses passes — likely a '
+          'self-referential store update loop (a watcher writing the same '
+          'store, or an unbounded cascade). Fix the graph; do not raise the '
+          'limit.',
+        );
+      }
       // removeFirst() is O(1); List.removeAt(0) was O(n) → O(n²) flushes.
       while (_queue.isNotEmpty) {
         final job = _queue.removeFirst();
