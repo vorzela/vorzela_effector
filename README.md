@@ -1,8 +1,13 @@
 # vorzela_effector
 
-Effector-style reactive state for **Dart** and **Flutter** — stores, events, effects, `sample`, `combine`, scopes, and gates.
+Effector-style reactive state for **Dart** and **Flutter**.
 
-MIT licensed. Fine-grained subscriptions, sync graph flushes (no UI `getState()` races), effect generation so stale async results never commit, and Flutter widgets that **auto-unsubscribe on dispose**.
+Stores, events, effects, `sample`, `combine`, scopes, and gates — with fine-grained rebuilds, sync graph flushes (no UI `getState()` races), race-safe effects, and Flutter helpers that **auto-dispose** subscriptions and `TextEditingController`s.
+
+**License:** MIT  
+**Repo:** https://github.com/vorzela/vorzela_effector
+
+---
 
 ## Install
 
@@ -11,15 +16,16 @@ dependencies:
   vorzela_effector:
     git:
       url: https://github.com/vorzela/vorzela_effector.git
-    # or path: ../vorzela_effector
 ```
 
 ```dart
-import 'package:vorzela_effector/vorzela_effector.dart'; // core
-import 'package:vorzela_effector/flutter.dart';         // UnitBuilder, GateScope
+import 'package:vorzela_effector/vorzela_effector.dart'; // core (Dart)
+import 'package:vorzela_effector/flutter.dart';         // UnitBuilder, AutoDispose, …
 ```
 
-## Quick start (StatelessWidget)
+---
+
+## Quick start
 
 ```dart
 final $count = createStore(0);
@@ -41,7 +47,6 @@ class CounterPage extends StatelessWidget {
         children: [
           Text('$count'),
           TextButton(onPressed: () => incremented(), child: const Text('+')),
-          TextButton(onPressed: () => decremented(), child: const Text('-')),
         ],
       ),
     );
@@ -49,45 +54,202 @@ class CounterPage extends StatelessWidget {
 }
 ```
 
-`UnitBuilder` registers a watcher in `initState` and **unsubscribes in `dispose`** — same role as disposing a controller in a `StatefulWidget`.
+---
+
+## Text fields — auto-disposed controllers
+
+### `AutoDispose` (own any `TextEditingController`)
+
+```dart
+final nameChanged = createEventTyped<String>();
+final $name = createStore('');
+$name.on(nameChanged, (_, v) => v);
+
+class NameForm extends StatelessWidget {
+  const NameForm({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return AutoDispose(
+      builder: (context, d) {
+        // Disposed automatically when NameForm leaves the tree —
+        // no State.dispose() boilerplate.
+        final name = d.textEditingController();
+        final focus = d.focusNode();
+
+        return TextField(
+          controller: name,
+          focusNode: focus,
+          onChanged: (v) => nameChanged(v),
+          decoration: const InputDecoration(labelText: 'Name'),
+        );
+      },
+    );
+  }
+}
+```
+
+`AutoDisposeHandle` also provides:
+
+- `textEditingController({text})`
+- `focusNode({debugLabel})`
+- `scrollController({initialScrollOffset})`
+- `manage(value, dispose)` / `own(Disposable)`
+- `watchStore(store, onChange)`
+
+### `StoreTextField` (two-way bind to `Store<String>`)
+
+```dart
+final $email = createStore('');
+final setEmail = createEventTyped<String>();
+$email.on(setEmail, (_, v) => v);
+
+StoreTextField(
+  store: $email,
+  onChanged: setEmail.call,
+  decoration: const InputDecoration(labelText: 'Email'),
+  keyboardType: TextInputType.emailAddress,
+);
+```
+
+Typing updates the store via `onChanged`. Resetting the store (e.g. `setEmail('')`) rewrites the field. The internal `TextEditingController` is disposed with the widget.
+
+---
 
 ## Effector API map
 
 | Effector | vorzela_effector |
 |----------|------------------|
-| `createStore(0)` | `createStore(0)` → `Store` (`$name` convention) |
+| `createStore(0)` | `createStore(0)` |
 | `createEvent()` | `createEvent()` / `createEventTyped<T>()` |
-| `createEffect(handler)` | `createEffect<P,D>(handler)` → `.done` `.fail` `.\$pending` `.abort()` |
+| `createEffect(fn)` | `createEffect<P,D>(fn)` |
 | `$store.on(event, fn)` | `$store.on(event, fn)` |
-| `sample({ clock, source, fn, target })` | `sample(...)` |
-| `combine` / `$store.map` | `combine` / `combine2` / `$store.map` |
-| `fork` / `allSettled` | `fork()` / `allSettled(...)` |
+| `sample({…})` | `sample({…})` |
+| `combine` / `.map` | `combine` / `combine2` / `combine3` / `$store.map` |
+| `fork` / `allSettled` | `fork()` / `allSettled(…)` |
 | Gate | `createGate()` + `GateScope` |
+
+---
+
+## Full API reference
+
+### Factories (core)
+
+| API | Returns | Description |
+|-----|---------|-------------|
+| `createStore<T>(initial, {name, updateFilter})` | `Store<T>` | Writable atom |
+| `createEvent({name})` | `Event<void>` | Void event |
+| `createEventTyped<T>({name})` | `Event<T>` | Typed event |
+| `createEffect<P,D>(handler, {name})` | `Effect<P,D>` | Async effect |
+| `createGate<T>({name})` | `Gate<T>` | Mount lifecycle gate |
+| `sample({clock, source, filter, fn, target, name})` | `Object` | Connect units; returns `target` or new `Event` |
+| `combine(stores, fn, {name})` | `Store<R>` | Derived from list of stores |
+| `combine2(a, b, fn, {name})` | `Store<R>` | Two-store combine |
+| `combine3(a, b, c, fn, {name})` | `Store<R>` | Three-store combine |
+| `fork()` | `Scope` | Isolated scope |
+| `allSettled(unit, {scope, params})` | `Future<void>` | Run event/effect and flush |
+| `scopeBind(unit, {scope})` | `Function` | Bind call to a scope |
+| `isStore` / `isEvent` / `isEffect` | `bool` | Type guards |
+| `Kernel.instance.batch(fn)` | — | Coalesce nested updates |
+
+### `Store<T>`
+
+| Member | Description |
+|--------|-------------|
+| `getState()` / `value` | Current value (avoid in UI graphs; prefer `sample` / `UnitBuilder`) |
+| `on<P>(Event<P>, reducer)` | Update from event |
+| `reset(Event<void>, [to])` | Reset on clock |
+| `map<R>(fn, {name, updateFilter})` | Derived store |
+| `watch(listener)` → `Subscription` | Subscribe |
+| `write(value)` | Internal / sample target write |
+| `attachLinks(subs)` | Keep child subscriptions alive |
+| `dispose()` | Clear listeners + links |
+| `isDerived` / `isDisposed` / `subscriberCount` / `name` | Introspection |
+
+### `Event<T>`
+
+| Member | Description |
+|--------|-------------|
+| `call([payload])` | Fire event |
+| `to(handler)` → `Subscription` | Side-effect handler |
+| `watch(listener)` → `Subscription` | Observe fires |
+| `dispose()` | Tear down |
+
+### `Effect<P, D>`
+
+| Member | Description |
+|--------|-------------|
+| `call(params)` → `Future<D>` | Run handler (generation-tracked) |
+| `abort()` | Bump generation; ignore in-flight results |
+| `done` | `Event<EffectDone<P,D>>` (`params`, `result`) |
+| `fail` | `Event<EffectFail<P>>` (`params`, `error`) |
+| `finally_` | `Event<P>` after done/fail |
+| `$pending` | `Store<bool>` |
+| `dispose()` | Abort + dispose child units |
+
+### `Gate<T>`
+
+| Member | Description |
+|--------|-------------|
+| `open` | `Event<T>` — fire with props |
+| `close` | `Event<void>` |
+| `$status` | `Store<bool>` open/closed |
+| `$state` | `Store<T?>` last props |
+| `isOpen` | Convenience |
+| `dispose()` | Dispose child units |
+
+### `Scope`
+
+| Member | Description |
+|--------|-------------|
+| `own(unit)` | Dispose unit with scope |
+| `getState` / `setState` | Scoped store access |
+| `dispose()` | Dispose owned units |
+| `isDisposed` | |
+
+### `Subscription`
+
+| Member | Description |
+|--------|-------------|
+| `unsubscribe()` / `dispose()` | Detach listener |
+| `isActive` | |
+
+### Flutter (`package:vorzela_effector/flutter.dart`)
+
+| API | Description |
+|-----|-------------|
+| `UnitBuilder<T>(unit, builder)` | Rebuild on store change; unsub on dispose |
+| `MultiUnitBuilder(units, builder)` | Rebuild when any store changes |
+| `GateScope<T>(gate, props, child)` | `open` on mount, `close` on dispose |
+| `AutoDispose(builder)` | Builder with `AutoDisposeHandle` |
+| `AutoDisposeHandle.textEditingController` | Auto-disposed `TextEditingController` |
+| `AutoDisposeHandle.focusNode` | Auto-disposed `FocusNode` |
+| `AutoDisposeHandle.scrollController` | Auto-disposed `ScrollController` |
+| `AutoDisposeHandle.manage` / `own` | Register custom disposables |
+| `AutoDisposeHandle.watchStore` | Subscription cleared on dispose |
+| `StoreTextField` | Two-way `Store<String>` ↔ field |
+| `UnitHook` | Manual sub list for custom `State` |
+| `Disposable` / `DisposableRef` | Dispose protocol |
+
+---
 
 ## Async effects (race-safe)
 
 ```dart
-final fetchUserFx = createEffect<String, Map>((id) async {
-  final res = await http.get(Uri.parse('https://api.example.com/users/$id'));
-  return jsonDecode(res.body) as Map;
-});
-
+final fetchUserFx = createEffect<String, Map>((id) async { /* … */ });
 final $user = createStore<Map?>(null);
 $user.on(fetchUserFx.done, (_, d) => d.result);
 
-// Rapid calls: only the latest generation updates stores.
 fetchUserFx('1');
-fetchUserFx('2');
+fetchUserFx('2'); // only this generation may commit
+fetchUserFx.abort(); // on route leave
 ```
 
-Call `fetchUserFx.abort()` to drop in-flight results (e.g. on route leave).
+---
 
-## sample (no getState races)
+## `sample` (no getState races)
 
 ```dart
-final $form = createStore(FormData());
-final submitted = createEvent();
-
 sample(
   clock: submitted,
   source: $form,
@@ -96,50 +258,32 @@ sample(
 );
 ```
 
-When `submitted` fires, `$form` is read **inside the same sync flush** as the clock — safer than reading stores ad hoc in button handlers for multi-step graphs.
-
-## Gate (feature auto lifecycle)
-
-```dart
-final pageGate = createGate<String>(name: 'profile');
-
-sample(clock: pageGate.open, target: loadProfileFx);
-
-// In UI:
-GateScope<String>(
-  gate: pageGate,
-  props: userId,
-  child: ProfileView(),
-);
-```
-
-Opens on mount, closes on dispose.
-
-## Scope dispose
-
-```dart
-final scope = fork();
-scope.own($local);
-scope.own(localEvent);
-// …
-scope.dispose(); // disposes owned units, cancels effect generations owned via abort patterns
-```
+---
 
 ## Performance
 
-- Per-store subscriber lists (widgets rebuild only for watched stores)
-- Nested updates batch into one notification flush
-- Derived stores (`map` / `combine`) are read-only
-- Effects never block the UI isolate; commits go through the graph queue
+- Per-store subscriber lists
+- Nested updates batch into one flush
+- Derived stores are read-only
+- Effects never block the UI isolate
 
 ## Never do this in UI
 
 ```dart
-// Bad — racey / bypasses the graph
-onPressed: () => save(formStore.getState());
+onPressed: () => save($form.getState()); // racey
 ```
 
-Prefer `sample` or pass payloads through events.
+Prefer `sample` or event payloads.
+
+---
+
+## Tests
+
+```bash
+flutter test
+```
+
+---
 
 ## License
 

@@ -1,12 +1,13 @@
 /// Flutter bindings for vorzela_effector — prefer [StatelessWidget] + [UnitBuilder].
 ///
-/// Subscriptions auto-unsubscribe on dispose (no leaked listeners).
+/// Subscriptions and [TextEditingController]s auto-dispose with the widget tree.
 library;
 
 import 'package:flutter/widgets.dart';
 import 'package:vorzela_effector/vorzela_effector.dart';
 
 export 'package:vorzela_effector/vorzela_effector.dart';
+export 'src/flutter/auto_dispose.dart';
 
 /// Rebuild when [unit] (a [Store]) changes. Auto-disposes the subscription.
 class UnitBuilder<T> extends StatefulWidget {
@@ -151,7 +152,7 @@ class _GateScopeState<T> extends State<GateScope<T>> {
 }
 
 /// Hook-style helpers for use inside a [StatefulWidget] that owns subscriptions.
-/// Prefer [UnitBuilder] for StatelessWidget trees.
+/// Prefer [UnitBuilder] / [AutoDispose] for StatelessWidget trees.
 final class UnitHook {
   UnitHook();
 
