@@ -1,0 +1,23 @@
+name: vorzela_effector
+description: Effector-style reactive state for Dart and Flutter — stores, events, effects, sample, scopes, gates.
+version: 0.0.1
+homepage: https://github.com/vorzela/vorzela_effector
+repository: https://github.com/vorzela/vorzela_effector
+issue_tracker: https://github.com/vorzela/vorzela_effector/issues
+license: MIT
+
+environment:
+  sdk: ^3.3.0
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.11.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
