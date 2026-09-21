@@ -58,10 +58,20 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     scheduleNotify(next);
   }
 
-  /// Internal write used by sample/combine/effects.
+  /// Internal write used by sample/effects.
+  ///
+  /// Derived stores (`.map`/`combine`) are read-only from the outside — only
+  /// their own derivation pipeline may write to them (via [writeDerived]).
+  /// Without this guard, `sample(target: $derivedStore)` or any other code
+  /// holding a reference could silently stomp the derived value until the
+  /// next source update overwrote it again.
   void write(T next) {
     if (_derived) {
-      // Derived stores are written only by their derivation pipeline.
+      throw StateError(
+        'Cannot write to a derived store'
+        '${name == null ? '' : ' ($name)'} — it is computed from .map()/'
+        'combine() and updates only when its source(s) change.',
+      );
     }
     _set(next);
   }

@@ -7,10 +7,10 @@ dynamic readSource(Object? source) {
   if (source == null) return null;
   if (source is Store) return source.getState();
   if (source is List) {
-    return [for (final s in source) readSource(s as Object)];
+    return [for (final s in source) readSource(s)];
   }
   if (source is Map) {
-    return {for (final e in source.entries) e.key: readSource(e.value as Object)};
+    return {for (final e in source.entries) e.key: readSource(e.value)};
   }
   return source;
 }
@@ -93,14 +93,37 @@ Object sample({
   final clockSub = subscribeClock(effectiveClock, run);
   // Every sink here is a Unit (Store/Event/Effect); attach the clock
   // subscription so it's torn down automatically when the sink is disposed,
-  // instead of living forever with nothing able to reach it. (A `target:
-  // [a, b]` list isn't itself a Unit — attach to each element instead so
-  // disposing *any* of them releases this link.)
+  // instead of living forever with nothing able to reach it.
   if (sink is Unit) {
     sink.attachLinks([clockSub]);
   } else if (sink is List) {
-    for (final t in sink) {
-      if (t is Unit) t.attachLinks([clockSub]);
+    // A `target: [a, b]` list isn't itself a Unit, so each element gets its
+    // own link — but it must NOT be the same Subscription instance handed
+    // to every element. Subscription.unsubscribe() is a one-shot guarded
+    // call, so sharing one Subscription meant whichever target happened to
+    // be disposed *first* silently killed clock delivery for every other
+    // target still alive and still listening. Instead, give each target an
+    // independent, reference-counted wrapper: the underlying clock
+    // subscription is only actually torn down once *all* targets in the
+    // list have been disposed.
+    final targets = sink.whereType<Unit>().toList(growable: false);
+    var remaining = targets.length;
+    if (remaining == 0) {
+      // No Unit to own this link — nothing else can reach it, so there's
+      // nothing to leak into either; tear it down immediately.
+      clockSub.unsubscribe();
+    } else {
+      for (final t in targets) {
+        var released = false;
+        t.attachLinks([
+          Subscription(() {
+            if (released) return;
+            released = true;
+            remaining--;
+            if (remaining == 0) clockSub.unsubscribe();
+          }),
+        ]);
+      }
     }
   }
   return target ?? createdEvent!;

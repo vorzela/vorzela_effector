@@ -271,5 +271,96 @@ void main() {
     bump(0);
     expect($s.getState(), 0);
   });
-}
 
+  test('write() throws on a derived store instead of silently corrupting it',
+      () {
+    final $base = createStore(1);
+    final $doubled = $base.map((v) => v * 2);
+
+    expect(() => $doubled.write(999), throwsStateError);
+    expect($doubled.getState(), 2);
+  });
+
+  test('sample refuses to write directly into a derived target', () {
+    final $base = createStore(1);
+    final $doubled = $base.map((v) => v * 2);
+    final clock = createEvent();
+
+    sample(clock: clock, fn: (_, __) => 999, target: $doubled);
+
+    expect(() => clock(), throwsStateError);
+  });
+
+  test('Event.to() unsubscribe is identity-based for duplicate handlers', () {
+    final e = createEventTyped<int>();
+    final seen = <int>[];
+    void handler(int v) => seen.add(v);
+
+    final a = e.to(handler);
+    final b = e.to(handler);
+    e(1);
+    expect(seen, [1, 1]);
+
+    a.unsubscribe();
+    e(2);
+    // Only one registration was removed — the other must still fire.
+    expect(seen, [1, 1, 2]);
+
+    b.unsubscribe();
+    e(3);
+    expect(seen, [1, 1, 2]);
+  });
+
+  test('disposing one sample() list-target does not silently mute the others',
+      () {
+    final clock = createEvent();
+    final a = createEventTyped<int>();
+    final b = createEventTyped<int>();
+    final seenA = <int>[];
+    final seenB = <int>[];
+    a.to(seenA.add);
+    b.to(seenB.add);
+
+    sample(clock: clock, fn: (_, __) => 1, target: [a, b]);
+
+    clock();
+    expect(seenA, [1]);
+    expect(seenB, [1]);
+
+    a.dispose();
+    clock();
+    // `b` was never disposed — it must keep receiving updates.
+    expect(seenB, [1, 1]);
+  });
+
+  test('readSource accepts null entries in list/map sources', () {
+    final clock = createEvent();
+    final out = createEventTyped<dynamic>();
+    final seen = <dynamic>[];
+    out.to(seen.add);
+
+    sample(
+      clock: clock,
+      source: [null, createStore(1)],
+      target: out,
+    );
+    clock();
+    expect(seen, [
+      [null, 1],
+    ]);
+
+    final clock2 = createEvent();
+    final seen2 = <dynamic>[];
+    final out2 = createEventTyped<dynamic>();
+    out2.to(seen2.add);
+    sample(
+      clock: clock2,
+      source: {'a': null, 'b': createStore(2)},
+      target: out2,
+    );
+    clock2();
+    expect(seen2, [
+      {'a': null, 'b': 2},
+    ]);
+  });
+}
