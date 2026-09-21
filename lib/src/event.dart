@@ -11,14 +11,17 @@ final class Event<T> extends Unit with Subscribable<T> {
   // (e.g. a top-level function or tear-off) via `.to()` more than once could
   // make unsubscribing one Subscription silently detach a *different* one.
   final List<_HandlerSlot<T>> _handlerSlots = [];
+  int _handlerLiveCount = 0;
 
   /// Subscribe a side-effect handler (graph links use this internally).
   Subscription to(void Function(T payload) handler) {
     final slot = _HandlerSlot<T>(handler);
     _handlerSlots.add(slot);
+    _handlerLiveCount++;
     return Subscription(() {
       if (slot.removed) return;
       slot.removed = true;
+      _handlerLiveCount--;
     });
   }
 
@@ -28,15 +31,26 @@ final class Event<T> extends Unit with Subscribable<T> {
     final T value = payload as T;
     Kernel.instance.batch(() {
       // Snapshot indices (not a copy of every slot) so a handler that
-      // unsubscribes mid-fire is respected without extra allocation.
+      // unsubscribes mid-fire is respected without extra allocation —
+      // same trick as [Subscribable.notify].
       final len = _handlerSlots.length;
       for (var i = 0; i < len; i++) {
         final slot = _handlerSlots[i];
         if (!slot.removed) slot.listener(value);
       }
-      _handlerSlots.removeWhere((s) => s.removed);
+      _compactHandlersIfNeeded();
       notify(value);
     });
+  }
+
+  void _compactHandlersIfNeeded() {
+    // Match Subscribable: only pay for compaction once enough dead slots
+    // have accumulated. Hot events with a few live `.to()` handlers must
+    // not `removeWhere` on every fire.
+    if (_handlerSlots.length > 16 &&
+        _handlerLiveCount * 2 < _handlerSlots.length) {
+      _handlerSlots.removeWhere((s) => s.removed);
+    }
   }
 
   @override
@@ -46,6 +60,7 @@ final class Event<T> extends Unit with Subscribable<T> {
     // Event still pinned every `.to()` handler closure (and whatever they
     // captured) in memory forever.
     _handlerSlots.clear();
+    _handlerLiveCount = 0;
     super.onDispose();
   }
 }

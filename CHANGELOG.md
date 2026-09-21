@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.5
+
+### Fixed
+- **`Event.to()` hot path** — stop calling `removeWhere` on every fire.
+  Tombstone + lazy compact (same thresholds as `Subscribable.watch`) so a
+  busy event with a few live graph links does not scan/reallocate the
+  handler list each tick.
+
 ## 0.0.4
 
 ### Fixed
