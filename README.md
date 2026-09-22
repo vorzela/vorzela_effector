@@ -205,6 +205,44 @@ runApp(ScopeProvider(scope: client, child: App()));
 
 ---
 
+## Tables & realtime chat
+
+Effector stays fine under high churn **if** you scope rebuilds:
+
+| UI | Pattern |
+|----|---------|
+| Data table | One `$rows` store (or paginated window). `UnitBuilder` only around cells/rows that need live values — not the whole `DataTable`. Prefer sibling builders over nesting. |
+| Chat transcript | `$messages` as a list (append via events). One `UnitBuilder` on `$messages` for the list; composer chrome in a **sibling** builder on `$draft`. Cap list length (e.g. last 200) or window so RAM stays flat. |
+| Typing / presence | Separate small stores (`$typing`, `$online`) — don't rebuild the transcript when someone types. |
+| WebSocket fan-in | `onJson` → `messageReceived(event)` → store updates inside Kernel batch. Never `setState` in the socket callback for the whole page. |
+
+```dart
+// Good: list rebuilds; draft field does not
+Column(children: [
+  Expanded(
+    child: UnitBuilder(
+      unit: $messages,
+      builder: (_, msgs) => ListView.builder(
+        itemCount: msgs.length,
+        itemBuilder: (_, i) => Text(msgs[i].text),
+      ),
+    ),
+  ),
+  UnitBuilder(
+    unit: $draft,
+    builder: (_, d) => TextField(
+      controller: /* bindText */,
+      onSubmitted: (_) => sendPressed(),
+    ),
+  ),
+])
+```
+
+Pair with `vorzela_json` lazy lists for large catalogs and `VorzelaWebSocket`
+(heartbeat `kind: heartbeat`) for the wire — keep Effector as the UI graph only.
+
+---
+
 ## Performance notes
 
 - Skip-notify when `==` / `identical` (or custom `updateFilter`)
