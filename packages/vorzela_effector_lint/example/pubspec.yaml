@@ -1,0 +1,15 @@
+name: vorzela_effector_lint_example
+publish_to: none
+environment:
+  sdk: ^3.5.0
+  flutter: ">=3.16.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  vorzela_effector:
+    path: ../../..
+dev_dependencies:
+  custom_lint: ^0.8.1
+  vorzela_effector_lint:
+    path: ..
+  flutter_lints: ^5.0.0

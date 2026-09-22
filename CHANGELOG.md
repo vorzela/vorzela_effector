@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+### Added
+- **`packages/vorzela_effector_lint`** — `custom_lint` rules for best practices
+  (naming, no getState/watch/create in build, prefer bind under ScopeProvider).
+
 ## 0.1.1
 
 ### Simplified mental model

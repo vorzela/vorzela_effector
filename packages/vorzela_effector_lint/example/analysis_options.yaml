@@ -1,0 +1,13 @@
+analyzer:
+  plugins:
+    - custom_lint
+include: package:flutter_lints/flutter.yaml
+custom_lint:
+  rules:
+    - prefer_dollar_store_name
+    - prefer_fx_effect_name
+    - avoid_get_state_in_widget
+    - avoid_watch_in_widget
+    - avoid_create_unit_in_widget
+    - prefer_bind_in_widget
+    - avoid_create_event_typed

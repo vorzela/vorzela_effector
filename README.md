@@ -211,6 +211,18 @@ store.watch((_) => setState(() {}));     // in build → stacks listeners
 
 ---
 
+## Linter (best practices)
+
+Use [`vorzela_effector_lint`](packages/vorzela_effector_lint) with
+`custom_lint` ^0.8.1 to catch Effector-style footguns in the IDE:
+
+- `$` store / `Fx` effect naming
+- no `getState` / `.watch` / `createStore` inside `build`
+- prefer `bind` / `UnitAction` when the file uses `ScopeProvider`
+- no deprecated `createEventTyped`
+
+See [packages/vorzela_effector_lint/README.md](packages/vorzela_effector_lint/README.md).
+
 ## Tests
 
 ```bash
