@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.6
+
+### Fixed
+- **`Store.reset()`** — when `to` is omitted, restore the constructor
+  initial value (`defaultState`), not whatever `_state` was at the moment
+  `.reset()` was wired. Matches Effector’s always-reset-to-default semantics.
+
+### Added
+- **`Store.defaultState`** — the constructor initial value.
+
 ## 0.0.5
 
 ### Fixed

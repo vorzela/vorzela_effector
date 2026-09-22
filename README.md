@@ -238,7 +238,7 @@ You can still mix: `UnitBuilder` for store UI + normal `State` for animation onl
 |--------|-------------|
 | `getState()` / `value` | Current value (avoid in UI graphs; prefer `sample` / `UnitBuilder`) |
 | `on<P>(Event<P>, reducer)` | Update from event |
-| `reset(Event<void>, [to])` | Reset on clock |
+| `reset(Event<void>, [to])` | Reset to `defaultState` (or `to`) on clock |
 | `map<R>(fn, {name, updateFilter})` | Derived store |
 | `watch(listener)` → `Subscription` | Subscribe |
 | `write(value)` | Internal / sample target write |

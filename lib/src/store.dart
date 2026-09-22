@@ -12,9 +12,12 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     this.updateFilter,
     bool derived = false,
   })  : _state = initial,
+        _initial = initial,
         _derived = derived;
 
   T _state;
+  /// Value passed to the constructor — what [reset] restores when [to] is omitted.
+  final T _initial;
   final bool _derived;
   final UpdateFilter<T>? updateFilter;
 
@@ -22,6 +25,9 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
 
   /// Current value (alias of [getState] for Effector familiarity).
   T get value => _state;
+
+  /// Constructor default — Effector-style reset target when [reset]'s [to] is omitted.
+  T get defaultState => _initial;
 
   bool get isDerived => _derived;
 
@@ -39,9 +45,14 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
   }
 
   /// Reset store when [clock] fires.
+  ///
+  /// When [to] is omitted, restores the constructor [defaultState] — not
+  /// whatever value happened to be current when [reset] was wired. Capturing
+  /// `_state` at call time meant `$s.on(...); $s.write(x); $s.reset(e)` would
+  /// permanently "reset" to `x` instead of the real initial.
   Store<T> reset(Event<void> clock, [T? to]) {
     if (_derived) throw StateError('Cannot reset a derived store');
-    final target = to ?? _state;
+    final target = to ?? _initial;
     final sub = clock.to((_) => _set(target));
     attachLinks([sub]);
     return this;

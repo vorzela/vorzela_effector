@@ -14,6 +14,38 @@ void main() {
     expect($count.getState(), 2);
   });
 
+  test('reset() restores constructor initial, not state at wiring time', () {
+    final $s = createStore(0);
+    final set = createEventTyped<int>();
+    final clear = createEvent();
+    $s.on(set, (_, v) => v);
+
+    set(42);
+    expect($s.getState(), 42);
+
+    // Wired *after* a change — old bug captured 42 as the permanent target.
+    $s.reset(clear);
+    clear();
+    expect($s.getState(), 0);
+    expect($s.defaultState, 0);
+
+    set(7);
+    clear();
+    expect($s.getState(), 0);
+  });
+
+  test('reset(clock, to) uses the explicit value', () {
+    final $s = createStore('a');
+    final set = createEventTyped<String>();
+    final clear = createEvent();
+    $s.on(set, (_, v) => v);
+    $s.reset(clear, 'z');
+
+    set('mid');
+    clear();
+    expect($s.getState(), 'z');
+  });
+
   test('watch notifies subscribers', () {
     final $n = createStore(0);
     final set = createEventTyped<int>();
