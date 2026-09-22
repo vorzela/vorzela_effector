@@ -1,6 +1,7 @@
 /// Flutter bindings for vorzela_effector — prefer [StatelessWidget] + [UnitBuilder].
 ///
 /// Subscriptions and [TextEditingController]s auto-dispose with the widget tree.
+/// Wrap the tree in [ScopeProvider] for SSR / isolated ecommerce scopes.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -8,8 +9,14 @@ import 'package:vorzela_effector/vorzela_effector.dart';
 
 export 'package:vorzela_effector/vorzela_effector.dart';
 export 'src/flutter/auto_dispose.dart';
+import 'src/flutter/scope_provider.dart';
+export 'src/flutter/scope_provider.dart';
 
-/// Rebuild when [unit] (a [Store]) changes. Auto-disposes the subscription.
+/// Bind [unit] to the [ScopeProvider] above [context] (use for onPressed).
+void Function([dynamic params]) bindOf(BuildContext context, Object unit) =>
+    scopeBind(unit, scope: ScopeProvider.of(context));
+
+/// Rebuild when [unit] changes. Uses [ScopeProvider] when present.
 class UnitBuilder<T> extends StatefulWidget {
   const UnitBuilder({
     super.key,
@@ -27,27 +34,40 @@ class UnitBuilder<T> extends StatefulWidget {
 class _UnitBuilderState<T> extends State<UnitBuilder<T>> {
   late T _value;
   Subscription? _sub;
+  Scope? _scope;
 
   @override
-  void initState() {
-    super.initState();
-    _value = widget.unit.getState();
-    _sub = widget.unit.watch((v) {
-      if (!mounted) return;
-      setState(() => _value = v);
-    });
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scope = ScopeProvider.maybeOf(context);
+    if (scope != _scope || _sub == null) {
+      _rebind(scope);
+    }
+  }
+
+  void _rebind(Scope? scope) {
+    _sub?.unsubscribe();
+    _scope = scope;
+    if (scope != null) {
+      _value = scope.getState(widget.unit);
+      _sub = scope.watchStore(widget.unit, (v) {
+        if (!mounted) return;
+        setState(() => _value = v);
+      });
+    } else {
+      _value = widget.unit.getState();
+      _sub = widget.unit.watch((v) {
+        if (!mounted) return;
+        setState(() => _value = v);
+      });
+    }
   }
 
   @override
   void didUpdateWidget(covariant UnitBuilder<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.unit != widget.unit) {
-      _sub?.unsubscribe();
-      _value = widget.unit.getState();
-      _sub = widget.unit.watch((v) {
-        if (!mounted) return;
-        setState(() => _value = v);
-      });
+      _rebind(_scope);
     }
   }
 
@@ -62,7 +82,7 @@ class _UnitBuilderState<T> extends State<UnitBuilder<T>> {
   Widget build(BuildContext context) => widget.builder(context, _value);
 }
 
-/// Watch multiple stores; rebuild when any changes.
+/// Watch multiple stores; rebuild when any changes (respects [ScopeProvider]).
 class MultiUnitBuilder extends StatefulWidget {
   const MultiUnitBuilder({
     super.key,
@@ -79,11 +99,16 @@ class MultiUnitBuilder extends StatefulWidget {
 
 class _MultiUnitBuilderState extends State<MultiUnitBuilder> {
   final List<Subscription> _subs = [];
+  Scope? _scope;
 
   @override
-  void initState() {
-    super.initState();
-    _bind();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scope = ScopeProvider.maybeOf(context);
+    if (scope != _scope || _subs.isEmpty) {
+      _scope = scope;
+      _bind();
+    }
   }
 
   void _bind() {
@@ -91,10 +116,17 @@ class _MultiUnitBuilderState extends State<MultiUnitBuilder> {
       s.unsubscribe();
     }
     _subs.clear();
+    final scope = _scope;
     for (final u in widget.units) {
-      _subs.add(u.watch((_) {
-        if (mounted) setState(() {});
-      }));
+      if (scope != null) {
+        _subs.add(scope.watchStore(u, (_) {
+          if (mounted) setState(() {});
+        }));
+      } else {
+        _subs.add(u.watch((_) {
+          if (mounted) setState(() {});
+        }));
+      }
     }
   }
 
@@ -152,13 +184,16 @@ class _GateScopeState<T> extends State<GateScope<T>> {
 }
 
 /// Thin subscription list for custom [State] code.
-/// Call only from `initState` (not every build) — prefer [AutoDisposeMixin].
 final class UnitHook {
   UnitHook();
 
   final List<Subscription> _subs = [];
 
-  T watchStore<T>(Store<T> store, void Function() onChange) {
+  T watchStore<T>(Store<T> store, void Function() onChange, {Scope? scope}) {
+    if (scope != null) {
+      _subs.add(scope.watchStore(store, (_) => onChange()));
+      return scope.getState(store);
+    }
     _subs.add(store.watch((_) => onChange()));
     return store.getState();
   }

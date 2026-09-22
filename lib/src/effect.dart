@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'event.dart';
 import 'kernel.dart';
+import 'scope.dart';
 import 'store.dart';
 import 'unit.dart';
 
@@ -22,12 +23,25 @@ final class EffectFail<P> {
 typedef EffectHandler<P, D> = FutureOr<D> Function(P params);
 
 /// Async effect with race-safe generations — stale results never commit.
+///
+/// Generations / inflight counts are **per [Scope]** (and a separate global
+/// lane) so overlapping `allSettled` on the same effect in two forks cannot
+/// cancel each other — required for ecommerce parallel fetches.
 final class Effect<P, D> extends Unit with Subscribable<P> {
   Effect(this._handler, {super.name}) {
-    done = createEventTyped<EffectDone<P, D>>(name: name == null ? null : '$name.done');
-    fail = createEventTyped<EffectFail<P>>(name: name == null ? null : '$name.fail');
-    finally_ = createEventTyped<P>(name: name == null ? null : '$name.finally');
-    $pending = createStore<bool>(false, name: name == null ? null : '$name.pending');
+    done = createEventTyped<EffectDone<P, D>>(
+      name: name == null ? null : '$name.done',
+    );
+    fail = createEventTyped<EffectFail<P>>(
+      name: name == null ? null : '$name.fail',
+    );
+    finally_ = createEventTyped<P>(
+      name: name == null ? null : '$name.finally',
+    );
+    $pending = createStore<bool>(
+      false,
+      name: name == null ? null : '$name.pending',
+    );
   }
 
   final EffectHandler<P, D> _handler;
@@ -41,58 +55,101 @@ final class Effect<P, D> extends Unit with Subscribable<P> {
   int _inflight = 0;
   bool _aborted = false;
 
-  /// Abort in-flight work: bump generation so late results are ignored.
   void abort() {
+    final active = Kernel.instance.currentScope;
+    if (active is Scope) {
+      active.abortEffect(this);
+      Kernel.instance.batch(() => $pending.write(false));
+      return;
+    }
     _aborted = true;
     _generation++;
     _inflight = 0;
     Kernel.instance.batch(() => $pending.write(false));
   }
 
-  /// Run the effect.
   Future<D> call(P params) {
     if (isDisposed) {
       return Future.error(StateError('Effect disposed'));
     }
-    _aborted = false;
-    final gen = ++_generation;
-    _inflight++;
+
+    final active = Kernel.instance.currentScope;
+    final EffectHandler<P, D> handler = active is Scope
+        ? (active.handlerFor<P, D>(this) ?? _handler)
+        : _handler;
+
+    late final int gen;
+    if (active is Scope) {
+      gen = active.beginEffect(this);
+    } else {
+      _aborted = false;
+      gen = ++_generation;
+      _inflight++;
+    }
+
     Kernel.instance.batch(() {
       $pending.write(true);
       notify(params);
     });
 
-    return Future.sync(() => _handler(params)).then((result) {
-      // Every completed call must release its inflight slot, even when its
-      // generation is stale — otherwise a call that started before an
-      // abort()/newer call finishes *after* it and its slot never gets
-      // released, leaving $pending stuck at `true` forever even though
-      // nothing is actually running anymore.
-      _inflight = (_inflight - 1).clamp(0, 1 << 30);
-      if (gen != _generation || _aborted || isDisposed) {
-        if (!isDisposed) {
-          Kernel.instance.batch(() => $pending.write(_inflight > 0));
+    return Future.sync(() => handler(params)).then((result) {
+      if (active is Scope) {
+        final still = active.endEffect(this, gen);
+        if (!still || isDisposed) {
+          if (!isDisposed) {
+            Kernel.instance.batch(
+              () => $pending.write(active.effectInflight(this) > 0),
+            );
+          }
+          return result;
         }
-        return result;
+      } else {
+        _inflight = (_inflight - 1).clamp(0, 1 << 30);
+        if (gen != _generation || _aborted || isDisposed) {
+          if (!isDisposed) {
+            Kernel.instance.batch(() => $pending.write(_inflight > 0));
+          }
+          return result;
+        }
       }
       Kernel.instance.batch(() {
         done(EffectDone(params: params, result: result));
         finally_(params);
-        $pending.write(_inflight > 0);
+        if (active is Scope) {
+          $pending.write(active.effectInflight(this) > 0);
+        } else {
+          $pending.write(_inflight > 0);
+        }
       });
       return result;
     }, onError: (Object e, StackTrace st) {
-      _inflight = (_inflight - 1).clamp(0, 1 << 30);
-      if (gen != _generation || _aborted || isDisposed) {
-        if (!isDisposed) {
-          Kernel.instance.batch(() => $pending.write(_inflight > 0));
+      if (active is Scope) {
+        final still = active.endEffect(this, gen);
+        if (!still || isDisposed) {
+          if (!isDisposed) {
+            Kernel.instance.batch(
+              () => $pending.write(active.effectInflight(this) > 0),
+            );
+          }
+          return Future<D>.error(e, st);
         }
-        return Future<D>.error(e, st);
+      } else {
+        _inflight = (_inflight - 1).clamp(0, 1 << 30);
+        if (gen != _generation || _aborted || isDisposed) {
+          if (!isDisposed) {
+            Kernel.instance.batch(() => $pending.write(_inflight > 0));
+          }
+          return Future<D>.error(e, st);
+        }
       }
       Kernel.instance.batch(() {
         fail(EffectFail(params: params, error: e));
         finally_(params);
-        $pending.write(_inflight > 0);
+        if (active is Scope) {
+          $pending.write(active.effectInflight(this) > 0);
+        } else {
+          $pending.write(_inflight > 0);
+        }
       });
       return Future<D>.error(e, st);
     });

@@ -4,28 +4,27 @@ import 'kernel.dart';
 import 'store.dart';
 import 'unit.dart';
 
-/// Isolated Effector-style scope: forked store values + dispose bag.
+final class _ScopeSlot {
+  _ScopeSlot(this.listener);
+  final void Function(dynamic value) listener;
+  bool removed = false;
+}
+
+/// Isolated Effector-style scope for tests, SSR, and Provider UI trees.
 ///
-/// **What works (Effector-compatible subset):**
-/// - [fork] / [fork] `values:` seed overrides
-/// - [allSettled] / [scopeBind] run units inside the scope via
-///   [Kernel.runInScope] / [runInScopeAsync]
-/// - Leaf [Store] reads/writes during that window hit this scope's bag —
-///   global `store.getState()` stays unchanged
-///
-/// **Not yet Effector-complete:**
-/// - No `serialize` / `hydrate` / effect `handlers:` overrides
-/// - Derived stores (`.map` / `combine`) are not graph-cloned — scoped
-///   updates to sources do not recompute derived values inside the scope
-/// - Scoped writes do not notify global `watch` / `UnitBuilder` listeners
-///   (by design — isolation); UI must read via [getState] on the scope or
-///   run under a bound callback
-/// - Overlapping concurrent [allSettled] on different scopes on one isolate
-///   can clobber [Kernel.currentScope] — run them sequentially
+/// Zone-backed ([Kernel.runInScopeAsync]) so overlapping [allSettled] calls
+/// on one isolate stay isolated. Leaf + derived stores recompute inside the
+/// fork; [watchStore] drives [ScopeProvider] / [UnitBuilder] without touching
+/// global watchers.
 final class Scope {
   Scope._();
 
   final Map<Store, dynamic> _values = {};
+  final Map<Store, List<_ScopeSlot>> _watchers = {};
+  final Map<Effect, Function> _handlers = {};
+  final Map<Effect, int> _effectGen = {};
+  final Map<Effect, int> _effectInflight = {};
+  final Set<Store> _changed = {};
   final List<Unit> _owned = [];
   bool _disposed = false;
 
@@ -35,19 +34,106 @@ final class Scope {
 
   T read<T>(Store<T> store) => _values[store] as T;
 
-  void writeValue(Store store, Object? value) => _values[store] = value;
+  void writeValue(Store store, Object? value) {
+    _values[store] = value;
+    _changed.add(store);
+  }
+
+  /// Effect handler override for this scope (from [fork] `handlers:`).
+  EffectHandler<P, D>? handlerFor<P, D>(Effect<P, D> effect) {
+    final h = _handlers[effect];
+    if (h == null) return null;
+    return h as EffectHandler<P, D>;
+  }
+
+  void _setHandler(Effect effect, Function handler) {
+    _handlers[effect] = handler;
+  }
 
   T getState<T>(Store<T> store) {
     if (_disposed) throw StateError('Scope disposed');
     if (_values.containsKey(store)) return _values[store] as T;
-    return store.getState();
+    if (store.isDerived && store.hasCompute) {
+      return Kernel.instance.runInScope(this, () {
+        final v = store.computeValue() as T;
+        writeValue(store, v);
+        return v;
+      });
+    }
+    return store.globalState;
   }
 
-  /// Write into this scope's own snapshot **only** (does not mutate the
-  /// global store, and does not require being inside [Kernel.runInScope]).
   void setState<T>(Store<T> store, T value) {
     if (_disposed) throw StateError('Scope disposed');
-    _values[store] = value;
+    final prev = contains(store) ? read<T>(store) : store.globalState;
+    if (identical(prev, value) || prev == value) return;
+    writeValue(store, value);
+    notifyStore(store, value);
+    Kernel.instance.runInScope(this, () => recomputeDependents(store));
+  }
+
+  /// Subscribe to [store] updates **in this scope only**.
+  Subscription watchStore<T>(Store<T> store, void Function(T value) listener) {
+    if (_disposed) throw StateError('Cannot watch on a disposed scope');
+    final slot = _ScopeSlot((v) => listener(v as T));
+    (_watchers[store] ??= []).add(slot);
+    return Subscription(() {
+      if (slot.removed) return;
+      slot.removed = true;
+    });
+  }
+
+  void notifyStore(Store store, Object? value) {
+    final slots = _watchers[store];
+    if (slots == null || slots.isEmpty) return;
+    final len = slots.length;
+    for (var i = 0; i < len; i++) {
+      final slot = slots[i];
+      if (!slot.removed) slot.listener(value);
+    }
+    if (slots.length > 16) {
+      final live = slots.where((s) => !s.removed).length;
+      if (live * 2 < slots.length) {
+        slots.removeWhere((s) => s.removed);
+      }
+    }
+  }
+
+  /// Recompute derived stores that depend on [source] inside this scope.
+  void recomputeDependents(Store source) {
+    for (final derived in source.dependents) {
+      if (!derived.hasCompute) continue;
+      final next = derived.computeValue();
+      final prev = contains(derived)
+          ? _values[derived]
+          : derived.globalState;
+      if (identical(prev, next) || prev == next) continue;
+      writeValue(derived, next);
+      notifyStore(derived, next);
+      recomputeDependents(derived);
+    }
+  }
+
+
+  int beginEffect(Effect effect) {
+    final gen = (_effectGen[effect] ?? 0) + 1;
+    _effectGen[effect] = gen;
+    _effectInflight[effect] = (_effectInflight[effect] ?? 0) + 1;
+    return gen;
+  }
+
+  /// Returns true if this generation is still current (not aborted / superseded).
+  bool endEffect(Effect effect, int gen) {
+    final inflight = ((_effectInflight[effect] ?? 1) - 1).clamp(0, 1 << 30);
+    _effectInflight[effect] = inflight;
+    return gen == (_effectGen[effect] ?? 0);
+  }
+
+  int effectInflight(Effect effect) => _effectInflight[effect] ?? 0;
+
+  void abortEffect(Effect effect) {
+    _effectGen[effect] = (_effectGen[effect] ?? 0) + 1;
+    _effectInflight[effect] = 0;
   }
 
   void own(Unit unit) => _owned.add(unit);
@@ -60,24 +146,87 @@ final class Scope {
     }
     _owned.clear();
     _values.clear();
+    _watchers.clear();
+    _handlers.clear();
+    _effectGen.clear();
+    _effectInflight.clear();
+    _changed.clear();
   }
 }
 
 /// Create an isolated scope (Effector `fork`).
 ///
-/// [values] seeds per-store overrides, Effector-style:
-/// `fork(values: [($user, 'alice'), ($count, 1)])`.
-Scope fork({List<(Store, Object?)>? values}) {
+/// [values] — `($store, value)` tuples and/or a sid→value [Map].
+/// [handlers] — `(effect, mockHandler)` overrides for this scope only.
+Scope fork({
+  List<(Store, Object?)>? values,
+  Map<String, dynamic>? valuesMap,
+  List<(Effect, Function)>? handlers,
+}) {
   final scope = Scope._();
   if (values != null) {
     for (final (store, value) in values) {
       scope.writeValue(store, value);
     }
   }
+  if (valuesMap != null) {
+    for (final e in valuesMap.entries) {
+      final store = Store.bySid(e.key);
+      if (store != null) scope.writeValue(store, e.value);
+    }
+  }
+  if (handlers != null) {
+    for (final (effect, handler) in handlers) {
+      scope._setHandler(effect, handler);
+    }
+  }
   return scope;
 }
 
-/// Run [unit] (and wait for an [Effect] to settle) optionally inside [scope].
+/// Serialize scoped store values keyed by [Store.sid].
+///
+/// Stores without a `sid` are skipped. With [onlyChanges] (default true),
+/// only values written in this scope are included.
+Map<String, dynamic> serialize(
+  Scope scope, {
+  bool onlyChanges = true,
+}) {
+  if (scope.isDisposed) throw StateError('Cannot serialize a disposed scope');
+  final out = <String, dynamic>{};
+  final entries = onlyChanges
+      ? [
+          for (final s in scope._changed)
+            if (scope.contains(s)) MapEntry(s, scope._values[s]),
+        ]
+      : scope._values.entries.toList();
+  for (final e in entries) {
+    final sid = e.key.sid;
+    if (sid == null) continue;
+    out[sid] = e.value;
+  }
+  return out;
+}
+
+/// Apply serialized (or sid-keyed) values into [scope].
+void hydrate(Scope scope, Map<String, dynamic> values) {
+  if (scope.isDisposed) throw StateError('Cannot hydrate a disposed scope');
+  for (final e in values.entries) {
+    final store = Store.bySid(e.key);
+    if (store == null) continue;
+    final prev = scope.contains(store)
+        ? scope._values[store]
+        : store.globalState;
+    if (identical(prev, e.value) || prev == e.value) continue;
+    scope.writeValue(store, e.value);
+    scope.notifyStore(store, e.value);
+    Kernel.instance.runInScope(
+      scope,
+      () => scope.recomputeDependents(store),
+    );
+  }
+}
+
+/// Run [unit] optionally inside [scope], waiting for effects to settle.
 Future<void> allSettled(
   Object unit, {
   Scope? scope,
@@ -101,14 +250,10 @@ Future<void> allSettled(
   } else {
     await run();
   }
-  // Let microtasks from effect completions flush.
   await Future<void>.delayed(Duration.zero);
 }
 
-/// Bind a callable so it always runs inside [scope].
-///
-/// Events run synchronously in-scope. Effects keep the scope across their
-/// async handler via [Kernel.runInScopeAsync] (fire-and-forget Future).
+/// Bind a callable so it always runs inside [scope] (Zone-safe across await).
 void Function([dynamic params]) scopeBind(
   Object unit, {
   required Scope scope,

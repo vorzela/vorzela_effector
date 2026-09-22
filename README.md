@@ -56,6 +56,22 @@ class CounterPage extends StatelessWidget {
 
 ---
 
+## Scopes — when you need isolation
+
+For Alibaba / YouTube-class apps you often need **more than one live state
+tree**: a checkout sheet next to a catalog, SSR per request, or tests that
+must not touch global stores.
+
+1. Give durable stores a stable `sid` if you serialize them.
+2. `final scope = fork(…)` per request / screen / test.
+3. Wrap UI in `ScopeProvider(scope: scope, child: …)`.
+4. Trigger updates with `bindOf(context, event)` or `allSettled(…, scope:)`.
+5. Never call `event()` bare under a Provider if you meant the fork.
+
+See **Scope (ecommerce / SSR)** in the API reference below.
+
+---
+
 ## Controllers & dispose (why this exists)
 
 Flutter objects like `TextEditingController`, `FocusNode`, `ScrollController`,
@@ -217,18 +233,19 @@ You can still mix: `UnitBuilder` for store UI + normal `State` for animation onl
 
 | API | Returns | Description |
 |-----|---------|-------------|
-| `createStore<T>(initial, {name, updateFilter})` | `Store<T>` | Writable atom |
+| `createStore<T>(initial, {name, sid, updateFilter})` | `Store<T>` | Writable atom (`sid` for SSR) |
 | `createEvent({name})` | `Event<void>` | Void event |
 | `createEventTyped<T>({name})` | `Event<T>` | Typed event |
 | `createEffect<P,D>(handler, {name})` | `Effect<P,D>` | Async effect |
 | `createGate<T>({name})` | `Gate<T>` | Mount lifecycle gate |
 | `sample({clock, source, filter, fn, target, name})` | `Object` | Connect units; returns `target` or new `Event` |
-| `combine(stores, fn, {name})` | `Store<R>` | Derived from list of stores |
-| `combine2(a, b, fn, {name})` | `Store<R>` | Two-store combine |
-| `combine3(a, b, c, fn, {name})` | `Store<R>` | Three-store combine |
-| `fork({values})` | `Scope` | Isolated scope (optional value seeds) |
-| `allSettled(unit, {scope, params})` | `Future<void>` | Run event/effect (optionally in scope) |
-| `scopeBind(unit, {scope})` | `Function` | Bind call to always run in a scope |
+| `combine(stores, fn, {name, sid})` | `Store<R>` | Derived from list of stores |
+| `combine2` / `combine3` | `Store<R>` | Typed combines (`sid` optional) |
+| `fork({values, valuesMap, handlers})` | `Scope` | Isolated scope (seeds + effect mocks) |
+| `allSettled(unit, {scope, params})` | `Future<void>` | Run event/effect in optional scope |
+| `scopeBind(unit, {scope})` | `Function` | Bind call to a Zone scope |
+| `serialize(scope, {onlyChanges})` | `Map` | SSR payload by `sid` |
+| `hydrate(scope, values)` | — | Apply sid→value map into scope |
 | `isStore` / `isEvent` / `isEffect` | `bool` | Type guards |
 | `Kernel.instance.batch(fn)` | — | Coalesce nested updates |
 
@@ -239,7 +256,8 @@ You can still mix: `UnitBuilder` for store UI + normal `State` for animation onl
 | `getState()` / `value` | Current value (avoid in UI graphs; prefer `sample` / `UnitBuilder`) |
 | `on<P>(Event<P>, reducer)` | Update from event |
 | `reset(Event<void>, [to])` | Reset to `defaultState` (or `to`) on clock |
-| `map<R>(fn, {name, updateFilter})` | Derived store |
+| `map<R>(fn, {name, sid, updateFilter})` | Derived store (scoped recompute) |
+| `defaultState` / `globalState` / `sid` | Initial / unscoped / SSR id |
 | `watch(listener)` → `Subscription` | Subscribe |
 | `write(value)` | Internal / sample target write |
 | `attachLinks(subs)` | Keep child subscriptions alive |
@@ -278,26 +296,74 @@ You can still mix: `UnitBuilder` for store UI + normal `State` for animation onl
 | `isOpen` | Convenience |
 | `dispose()` | Dispose child units |
 
-### `Scope`
+### `Scope` (ecommerce / SSR)
 
-Isolated store-value bag for tests / SSR-style forks (Effector `fork` subset).
+Zone-isolated fork of store values — safe for parallel catalog/cart work,
+Provider UI trees, and SSR handoff.
 
 | Member | Description |
 |--------|-------------|
-| `fork({values})` | Create scope; `values: [($store, v), …]` seeds overrides |
-| `getState` / `setState` | Scoped store access (never mutates global) |
-| `own(unit)` | Dispose unit with scope |
-| `dispose()` | Dispose owned units |
-| `isDisposed` | |
+| `fork({values, valuesMap, handlers})` | Create scope; seed stores / mock effects |
+| `getState` / `setState` | Scoped access (never mutates global) |
+| `watchStore(store, fn)` | Scope-local subscription (drives `UnitBuilder`) |
+| `own(unit)` / `dispose()` | Lifecycle bag |
+| `serialize` / `hydrate` | SSR transfer by `Store.sid` |
 
-`allSettled(unit, {scope})` and `scopeBind(unit, {scope})` run the unit inside
-that scope: leaf store `.on` / `write` / `sample` updates go into the scope bag
-and leave `store.getState()` unchanged.
+**When to use a scope**
 
-**Not Effector-complete yet:** no `serialize`/`hydrate`, no effect `handlers:`
-overrides, derived `.map`/`combine` stores are not graph-cloned, scoped writes
-do not notify global `watch`/`UnitBuilder`, and overlapping concurrent
-`allSettled` on different scopes on one isolate is unsafe (run sequentially).
+| Use case | Pattern |
+|----------|---------|
+| Unit / widget tests | `fork()` + `allSettled(…, scope:)` |
+| Parallel page fetches | Concurrent `allSettled` on different scopes (Zone-safe) |
+| Checkout vs catalog UI | Sibling `ScopeProvider`s |
+| SSR / state transfer | `sid` on stores → `serialize` → `hydrate` / `fork(valuesMap:)` |
+| Mock API in one tree | `fork(handlers: [(fetchFx, mock)])` |
+
+**When not to use a scope**
+
+- Simple single-user SPA with one global graph — plain `createStore` is enough.
+- Firing `event()` from a button **without** `bindOf` / `scopeBind` under a
+  `ScopeProvider` — that writes the **global** store (same rule as Effector).
+
+#### Provider UI
+
+```dart
+final scope = fork(values: [($session, session)]);
+
+runApp(ScopeProvider(
+  scope: scope,
+  child: MaterialApp(
+    home: Builder(
+      builder: (context) => UnitBuilder<Cart>(
+        unit: $cart,
+        builder: (context, cart) => TextButton(
+          onPressed: bindOf(context, checkout), // must bind!
+          child: Text('Pay ${cart.total}'),
+        ),
+      ),
+    ),
+  ),
+));
+```
+
+#### SSR sketch
+
+```dart
+final $cartCount = createStore(0, sid: 'cart.count');
+
+// server
+final server = fork();
+await allSettled(loadCartFx, scope: server);
+final payload = serialize(server); // {'cart.count': 3}
+
+// client
+final client = fork(valuesMap: payload);
+// or: hydrate(client, payload);
+runApp(ScopeProvider(scope: client, child: App()));
+```
+
+Derived `.map` / `combine` recompute inside the fork when sources change.
+Overlapping `allSettled` on different scopes on one isolate is safe (Zone).
 
 ### `Subscription`
 
@@ -310,7 +376,9 @@ do not notify global `watch`/`UnitBuilder`, and overlapping concurrent
 
 | API | Description |
 |-----|-------------|
-| `UnitBuilder<T>(unit, builder)` | Rebuild on store change; unsub on dispose |
+| `ScopeProvider(scope, child)` | Inherited scope for the subtree |
+| `bindOf(context, unit)` | `scopeBind` to nearest `ScopeProvider` |
+| `UnitBuilder<T>(unit, builder)` | Rebuild on store change (scoped if Provider) |
 | `MultiUnitBuilder(units, builder)` | Rebuild when any store changes |
 | `GateScope<T>(gate, props, child)` | `open` on mount, `close` on dispose |
 | `Life` | Resource bag (controllers + watches); alias `AutoDisposeHandle` |

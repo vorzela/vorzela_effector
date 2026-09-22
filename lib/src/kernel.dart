@@ -1,6 +1,7 @@
 /// Synchronous Effector-style kernel: one flush queue, atomic source reads.
 library;
 
+import 'dart:async';
 import 'dart:collection';
 
 typedef VoidCallback = void Function();
@@ -8,6 +9,10 @@ typedef VoidCallback = void Function();
 abstract class Notifiable {
   void notifySubscribers();
 }
+
+/// Zone key for the active [Scope]. Typed as [Object] so kernel never imports
+/// scope.dart (avoids cycles). [Store] / [Effect] cast with `is Scope`.
+const Symbol kVorzelaScope = #vorzelaEffectorScope;
 
 final class Kernel {
   Kernel._();
@@ -22,40 +27,21 @@ final class Kernel {
   final Queue<VoidCallback> _queue = Queue<VoidCallback>();
   final Set<Object> _dirtyStores = {};
 
-  /// Active scope object for [runInScope] / [runInScopeAsync].
-  ///
-  /// Typed as [Object] to avoid a kernel↔scope import cycle; callers pass a
-  /// [Scope]. [Store] checks `is Scope` when reading/writing.
-  ///
-  /// Not safe to interleave overlapping async scopes on the same isolate —
-  /// run scoped work sequentially, or use [scopeBind] per callback.
-  Object? _currentScope;
+  /// Active scope from the current [Zone] (safe under overlapping async work).
+  Object? get currentScope => Zone.current[kVorzelaScope];
 
-  Object? get currentScope => _currentScope;
-
-  /// Run [fn] with [scope] as [currentScope] (nested calls stack).
+  /// Run [fn] with [scope] bound in a child [Zone] (nested sync calls stack).
   R runInScope<R>(Object scope, R Function() fn) {
-    final prev = _currentScope;
-    _currentScope = scope;
-    try {
-      return fn();
-    } finally {
-      _currentScope = prev;
-    }
+    return runZoned(fn, zoneValues: {kVorzelaScope: scope});
   }
 
   /// Like [runInScope] but keeps the scope across `await`s inside [fn].
+  /// Concurrent [allSettled] on different scopes on one isolate are safe.
   Future<R> runInScopeAsync<R>(
     Object scope,
     Future<R> Function() fn,
-  ) async {
-    final prev = _currentScope;
-    _currentScope = scope;
-    try {
-      return await fn();
-    } finally {
-      _currentScope = prev;
-    }
+  ) {
+    return runZoned(fn, zoneValues: {kVorzelaScope: scope});
   }
 
   /// Run [fn] inside a single graph flush (nested calls coalesce).
@@ -71,8 +57,6 @@ final class Kernel {
       _drain();
       failed = false;
     } finally {
-      // Leave the kernel consistent if `fn()` / a job throws — otherwise a
-      // leftover queue/dirty set would leak into the next unrelated batch.
       _flushing = false;
       if (failed) {
         _queue.clear();
@@ -81,9 +65,6 @@ final class Kernel {
     }
   }
 
-  /// Drain the job queue, then dirty notifiables, repeating until both are
-  /// empty so stores marked dirty *during* a dirty pass (combine → combine)
-  /// still settle in the same tick.
   void _drain() {
     var passes = 0;
     while (true) {
@@ -95,7 +76,6 @@ final class Kernel {
           'limit.',
         );
       }
-      // removeFirst() is O(1); List.removeAt(0) was O(n) → O(n²) flushes.
       while (_queue.isNotEmpty) {
         final job = _queue.removeFirst();
         job();

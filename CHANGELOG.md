@@ -1,56 +1,42 @@
 # Changelog
 
+## 0.1.0
+
+### Added — full Scope isolation (ecommerce / SSR)
+- **Zone-backed scopes** — overlapping `allSettled` on different scopes on one
+  isolate no longer clobber each other.
+- **Scope-local watchers** — `scope.watchStore` / scoped `Store.watch`; drives
+  `UnitBuilder` under `ScopeProvider` without leaking into global UI.
+- **Derived recompute in forks** — `.map` / `combine` track sources and
+  recompute inside the active scope.
+- **`fork(handlers:)`** — per-scope effect mocks.
+- **`sid` + `serialize` / `hydrate` / `fork(valuesMap:)`** — SSR handoff.
+- **`ScopeProvider` + `bindOf`** — Provider-style Flutter trees.
+- Per-scope effect generation lanes so the same effect can run in parallel forks.
+
+### Docs
+- README: when to use / not use scopes, Provider + SSR recipes, API updates.
+
 ## 0.0.7
 
 ### Fixed (Scope / fork audit)
-- **`allSettled` / `scopeBind` ignored `scope`** — they always mutated global
-  units. They now run inside `Kernel.runInScope` / `runInScopeAsync` so leaf
-  store updates stay in the fork (Effector’s basic two-scope example works).
-- **`Store.on` reducers read `_state` directly** — under a scope they now use
-  `getState()`, so forked values are visible to reducers.
-- **Scoped `_set`** writes the scope bag only (no global mutate, no global
-  notify leak).
-
-### Added
-- **`fork(values: [($store, value), …])`** — seed overrides at creation.
-- **`Store.globalState`** — unscoped introspection when needed.
-- **`Kernel.currentScope` / `runInScope` / `runInScopeAsync`**.
-
-### Docs
-- README documents what Scope is *not* yet (serialize, handlers, derived
-  graph clone, concurrent overlapping scopes).
+- `allSettled` / `scopeBind` honor `scope` for leaf store updates.
+- `Store.on` reducers use `getState()` under a scope.
 
 ## 0.0.6
 
 ### Fixed
-- **`Store.reset()`** — when `to` is omitted, restore the constructor
-  initial value (`defaultState`), not whatever `_state` was at the moment
-  `.reset()` was wired. Matches Effector’s always-reset-to-default semantics.
-
-### Added
-- **`Store.defaultState`** — the constructor initial value.
+- `Store.reset()` restores constructor `defaultState` when `to` is omitted.
 
 ## 0.0.5
 
 ### Fixed
-- **`Event.to()` hot path** — stop calling `removeWhere` on every fire.
-  Tombstone + lazy compact (same thresholds as `Subscribable.watch`) so a
-  busy event with a few live graph links does not scan/reallocate the
-  handler list each tick.
+- `Event.to()` lazy compaction (match `watch()`).
 
 ## 0.0.4
 
 ### Fixed
-- **`Store.write()`** — derived stores (`.map` / `combine`) now throw
-  `StateError` instead of silently accepting writes. Matches the README
-  “read-only” contract and blocks `sample(target: $derived)`.
-- **`Event.to()`** — unsubscribe is identity-safe via slots (same pattern as
-  `watch()`). Duplicate handler registrations no longer detach the wrong
-  subscription; disposed events clear `.to()` handler closures.
-- **`sample(target: [a, b])`** — each target gets a reference-counted link.
-  Disposing one target no longer tears down clock delivery to the others.
-- **`readSource`** — list/map sources may contain literal `null` without a
-  cast `TypeError`.
+- Derived `write()` guard, `Event.to()` identity, sample list links, `readSource` null.
 
 ## 0.0.3 and earlier
 

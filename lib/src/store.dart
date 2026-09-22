@@ -11,46 +11,81 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
   Store(
     T initial, {
     super.name,
+    this.sid,
     this.updateFilter,
     bool derived = false,
   })  : _state = initial,
         _initial = initial,
-        _derived = derived;
+        _derived = derived {
+    if (sid != null) {
+      _sidRegistry[sid!] = this;
+    }
+  }
+
+  /// Stable id for [serialize] / [hydrate] (Effector SID). Required for SSR.
+  final String? sid;
 
   T _state;
-  /// Value passed to the constructor — what [reset] restores when [to] is omitted.
   final T _initial;
   final bool _derived;
   final UpdateFilter<T>? updateFilter;
 
-  /// Current value — respects [Kernel.currentScope] when inside
-  /// [allSettled] / [scopeBind] / [Kernel.runInScope].
+  /// Sources + compute for derived stores (scoped recompute).
+  List<Store>? _sources;
+  Object? Function()? _compute;
+  final List<Store> _dependents = [];
+
+  static final Map<String, Store> _sidRegistry = {};
+
+  static Store? bySid(String sid) => _sidRegistry[sid];
+
+  /// Current value — respects Zone [Scope] when inside allSettled / scopeBind.
   T getState() {
     final scope = Kernel.instance.currentScope;
-    if (scope is Scope && scope.contains(this)) {
-      return scope.read<T>(this);
+    if (scope is Scope) {
+      if (scope.contains(this)) return scope.read<T>(this);
+      if (_derived && _compute != null) {
+        final v = _compute!() as T;
+        scope.writeValue(this, v);
+        return v;
+      }
     }
     return _state;
   }
 
-  /// Current value (alias of [getState] for Effector familiarity).
   T get value => getState();
 
-  /// Constructor default — Effector-style reset target when [reset]'s [to] is omitted.
   T get defaultState => _initial;
 
-  /// Global (unscoped) value — for rare introspection; prefer [getState].
+  /// Global (unscoped) value.
   T get globalState => _state;
 
   bool get isDerived => _derived;
 
-  /// `$store.on(event, (state, payload) => next)`
+  bool get hasCompute => _compute != null;
+
+  Object? computeValue() => _compute?.call();
+
+  List<Store> get dependents => _dependents;
+
+  List<Store>? get sources => _sources;
+
+  /// Watch — routes to the active Zone [Scope] when present so Provider UI
+  /// and scoped tests get isolated notifications.
+  @override
+  Subscription watch(Subscriber<T> listener) {
+    final scope = Kernel.instance.currentScope;
+    if (scope is Scope) {
+      return scope.watchStore(this, listener);
+    }
+    return super.watch(listener);
+  }
+
   Store<T> on<P>(Event<P> event, Reducer<T, P> reducer) {
     if (_derived) {
       throw StateError('Cannot .on() a derived store');
     }
     final sub = event.to((payload) {
-      // Must use getState() so reducers see forked values under a Scope.
       final next = reducer(getState(), payload);
       _set(next);
     });
@@ -58,12 +93,6 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     return this;
   }
 
-  /// Reset store when [clock] fires.
-  ///
-  /// When [to] is omitted, restores the constructor [defaultState] — not
-  /// whatever value happened to be current when [reset] was wired. Capturing
-  /// `_state` at call time meant `$s.on(...); $s.write(x); $s.reset(e)` would
-  /// permanently "reset" to `x` instead of the real initial.
   Store<T> reset(Event<void> clock, [T? to]) {
     if (_derived) throw StateError('Cannot reset a derived store');
     final target = to ?? _initial;
@@ -76,34 +105,23 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     if (isDisposed) return;
     final active = Kernel.instance.currentScope;
     if (active is Scope) {
-      final prev =
-          active.contains(this) ? active.read<T>(this) : _state;
-      if (updateFilter != null) {
-        if (!updateFilter!(prev, next)) return;
-      } else if (identical(prev, next) || prev == next) {
-        return;
-      }
-      // Forked write: bag only — do not mutate global `_state` or notify
-      // global watchers (that would leak the fork into the live UI tree).
+      final prev = active.contains(this) ? active.read<T>(this) : _state;
+      if (!_shouldUpdate(prev, next)) return;
       active.writeValue(this, next);
+      active.notifyStore(this, next);
+      active.recomputeDependents(this);
       return;
     }
-    if (updateFilter != null) {
-      if (!updateFilter!(_state, next)) return;
-    } else if (identical(_state, next) || _state == next) {
-      return;
-    }
+    if (!_shouldUpdate(_state, next)) return;
     _state = next;
     scheduleNotify(next);
   }
 
-  /// Internal write used by sample/effects.
-  ///
-  /// Derived stores (`.map`/`combine`) are read-only from the outside — only
-  /// their own derivation pipeline may write to them (via [writeDerived]).
-  /// Without this guard, `sample(target: $derivedStore)` or any other code
-  /// holding a reference could silently stomp the derived value until the
-  /// next source update overwrote it again.
+  bool _shouldUpdate(T prev, T next) {
+    if (updateFilter != null) return updateFilter!(prev, next);
+    return !(identical(prev, next) || prev == next);
+  }
+
   void write(T next) {
     if (_derived) {
       throw StateError(
@@ -115,27 +133,65 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     _set(next);
   }
 
-  /// Force write even for derived (used by combine/map internals).
   void writeDerived(T next) => _set(next);
 
-  /// `$store.map((s) => …)` — derived read-only store.
-  Store<R> map<R>(R Function(T state) fn, {String? name, UpdateFilter<R>? updateFilter}) {
+  /// Internal: install derivation metadata for scoped recompute.
+  void installDerivation({
+    required List<Store> sources,
+    required Object? Function() compute,
+  }) {
+    _sources = sources;
+    _compute = compute;
+    for (final s in sources) {
+      if (!s._dependents.contains(this)) {
+        s._dependents.add(this);
+      }
+    }
+  }
+
+  Store<R> map<R>(
+    R Function(T state) fn, {
+    String? name,
+    String? sid,
+    UpdateFilter<R>? updateFilter,
+  }) {
     final derived = Store<R>(
       fn(_state),
       name: name ?? (this.name == null ? null : '${this.name}.map'),
+      sid: sid,
       updateFilter: updateFilter,
       derived: true,
     );
-    derived.attachLinks([watch((v) => derived.writeDerived(fn(v)))]);
+    final Store<T> source = this;
+    derived.installDerivation(
+      sources: [source],
+      compute: () => fn(source.getState()),
+    );
+    derived.attachLinks([
+      // Global graph: keep non-scoped derived in sync.
+      watch((v) => derived.writeDerived(fn(v))),
+    ]);
     return derived;
+  }
+
+  @override
+  void onDispose() {
+    if (sid != null) {
+      _sidRegistry.remove(sid);
+    }
+    _dependents.clear();
+    _sources = null;
+    _compute = null;
+    super.onDispose();
   }
 }
 
 Store<T> createStore<T>(
   T initial, {
   String? name,
+  String? sid,
   UpdateFilter<T>? updateFilter,
 }) =>
-    Store<T>(initial, name: name, updateFilter: updateFilter);
+    Store<T>(initial, name: name, sid: sid, updateFilter: updateFilter);
 
 bool isStore(Object? u) => u is Store;
