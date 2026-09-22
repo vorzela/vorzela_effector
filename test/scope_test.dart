@@ -179,4 +179,88 @@ void main() {
     expect(scope.getState($n), 0);
     expect($n.getState(), 0);
   });
+
+  test('scoped combine recomputes once per batch (Kernel dirty dedup)', () async {
+    final $a = createStore(1, sid: 'sc.a');
+    final $b = createStore(2, sid: 'sc.b');
+    final setA = createEvent<int>();
+    final setB = createEvent<int>();
+    $a.on(setA, (_, v) => v);
+    $b.on(setB, (_, v) => v);
+
+    var computes = 0;
+    final $sum = combine([$a, $b], (vals) {
+      computes++;
+      return (vals[0] as int) + (vals[1] as int);
+    }, sid: 'sc.sum');
+
+    final scope = fork();
+    // Warm lazy derived read once (not counted against batch).
+    expect(scope.getState($sum), 3);
+    final baseline = computes;
+
+    await Kernel.instance.runInScopeAsync(scope, () async {
+      Kernel.instance.batch(() {
+        setA(10);
+        setB(20);
+      });
+    });
+
+    expect(scope.getState($sum), 30);
+    expect(computes - baseline, 1,
+        reason: 'scoped path must use Kernel _dirtyStores, not sync '
+            'recomputeDependents on every source write');
+    expect($sum.getState(), 3);
+  });
+
+  test('scoped nested derived settles in the same flush', () async {
+    final $a = createStore(1, sid: 'nest.a');
+    final setA = createEvent<int>();
+    $a.on(setA, (_, v) => v);
+
+    final $doubled = $a.map((v) => v * 2, sid: 'nest.doubled');
+    final $plusOne = combine([$doubled], (vals) => (vals[0] as int) + 1,
+        sid: 'nest.plus');
+
+    final scope = fork();
+    final seen = <int>[];
+    scope.watchStore($plusOne, seen.add);
+
+    await allSettled(setA, scope: scope, params: 5);
+
+    expect(scope.getState($doubled), 10);
+    expect(scope.getState($plusOne), 11);
+    // One notification with the settled value — not intermediate junk.
+    expect(seen, [11]);
+  });
+
+  test('scoped diamond combine does not double-fire', () async {
+    final $a = createStore(1, sid: 'dia.a');
+    final setA = createEvent<int>();
+    $a.on(setA, (_, v) => v);
+
+    final $left = $a.map((v) => v + 1, sid: 'dia.left');
+    final $right = $a.map((v) => v * 10, sid: 'dia.right');
+
+    var computes = 0;
+    final $join = combine([$left, $right], (vals) {
+      computes++;
+      return (vals[0] as int) + (vals[1] as int);
+    }, sid: 'dia.join');
+
+    final scope = fork();
+    expect(scope.getState($join), 1 + 1 + 1 * 10);
+    final baseline = computes;
+
+    final seen = <int>[];
+    scope.watchStore($join, seen.add);
+
+    await allSettled(setA, scope: scope, params: 2);
+
+    expect(scope.getState($left), 3);
+    expect(scope.getState($right), 20);
+    expect(scope.getState($join), 23);
+    expect(computes - baseline, 1);
+    expect(seen, [23]);
+  });
 }

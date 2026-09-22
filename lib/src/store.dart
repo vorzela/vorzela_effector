@@ -108,9 +108,12 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
     if (active is Scope) {
       final prev = active.contains(this) ? active.read<T>(this) : _state;
       if (!_shouldUpdate(prev, next)) return;
+      // Same contract as the global path: write now, notify + derived
+      // recompute through Kernel `_dirtyStores` at flush end — never
+      // sync-walk dependents (that bypasses batch dedup).
       active.writeValue(this, next);
-      active.notifyStore(this, next);
-      active.recomputeDependents(this);
+      active.queueNotify(this, next);
+      active.queueDependentRecompute(this);
       return;
     }
     if (!_shouldUpdate(_state, next)) return;

@@ -100,4 +100,14 @@ final class Kernel {
   void markDirty(Object store) {
     _dirtyStores.add(store);
   }
+
+  /// Whether a [batch] is currently draining the queue / dirty set.
+  bool get isFlushing => _flushing;
+
+  /// Drain any pending dirty work. No-op when already inside [batch]
+  /// (that batch's `_drain` will pick the new dirties up).
+  void flush() {
+    if (_flushing) return;
+    batch(() {});
+  }
 }

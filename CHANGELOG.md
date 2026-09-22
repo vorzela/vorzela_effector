@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3
+
+### Fixed
+- **Scoped derived stores** — `Store._set` no longer calls
+  `recomputeDependents` synchronously on every write. Scoped updates now
+  queue through Kernel `_dirtyStores` (same dedup as global `combine`), so a
+  multi-source combine inside a fork recomputes **once per batch**, nested
+  maps settle in one flush, and diamond graphs do not double-fire.
+
 ## 0.1.2
 
 ### Added

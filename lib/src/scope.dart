@@ -26,6 +26,16 @@ final class Scope {
   final Map<Effect, int> _effectInflight = {};
   final Set<Store> _changed = {};
   final List<Unit> _owned = [];
+
+  /// Derived stores waiting for a Kernel-deduped recompute (mirrors
+  /// global `combine` → `markDirty(recomputer)`).
+  final Set<Store> _pendingRecompute = {};
+
+  /// Latest value to push to [watchStore] listeners after the graph settles.
+  final Map<Store, Object?> _pendingNotify = {};
+
+  _ScopeDrain? _drain;
+  bool _draining = false;
   bool _disposed = false;
 
   bool get isDisposed => _disposed;
@@ -68,8 +78,78 @@ final class Scope {
     final prev = contains(store) ? read<T>(store) : store.globalState;
     if (identical(prev, value) || prev == value) return;
     writeValue(store, value);
-    notifyStore(store, value);
-    Kernel.instance.runInScope(this, () => recomputeDependents(store));
+    queueNotify(store, value);
+    queueDependentRecompute(store);
+    Kernel.instance.flush();
+  }
+
+  /// Defer [watchStore] notification until Kernel flush (like
+  /// [DeferredNotify.scheduleNotify] on the global graph).
+  void queueNotify(Store store, Object? value) {
+    _pendingNotify[store] = value;
+    _ensureDrainScheduled();
+  }
+
+  /// Mark derived dependents of [source] dirty — Kernel dedups via
+  /// [_ScopeDrain], so a multi-source [combine] recomputes once per batch.
+  void queueDependentRecompute(Store source) {
+    var added = false;
+    for (final derived in source.dependents) {
+      if (!derived.hasCompute) continue;
+      if (_pendingRecompute.add(derived)) added = true;
+    }
+    if (added) _ensureDrainScheduled();
+  }
+
+  void _ensureDrainScheduled() {
+    if (_draining) return;
+    _drain ??= _ScopeDrain(this);
+    Kernel.instance.markDirty(_drain!);
+  }
+
+  /// Kernel-driven flush: recompute dirty derived stores (with pass cap),
+  /// then fire deferred [watchStore] notifications.
+  void _drainPending() {
+    if (_disposed) {
+      _pendingRecompute.clear();
+      _pendingNotify.clear();
+      return;
+    }
+    _draining = true;
+    try {
+      Kernel.instance.runInScope(this, () {
+        var passes = 0;
+        while (_pendingRecompute.isNotEmpty) {
+          if (++passes > Kernel.maxFlushPasses) {
+            throw StateError(
+              'Scope derived flush exceeded ${Kernel.maxFlushPasses} passes — '
+              'likely a self-referential scoped update loop. Fix the graph.',
+            );
+          }
+          final batch = _pendingRecompute.toList(growable: false);
+          _pendingRecompute.clear();
+          for (final derived in batch) {
+            if (!derived.hasCompute) continue;
+            final next = derived.computeValue();
+            final prev = contains(derived)
+                ? _values[derived]
+                : derived.globalState;
+            if (identical(prev, next) || prev == next) continue;
+            // writeDerived → Store._set (scoped) → queueNotify + queue
+            // dependents; `_draining` keeps us from re-markDirty mid-loop.
+            derived.writeDerived(next);
+          }
+        }
+        if (_pendingNotify.isEmpty) return;
+        final notifies = Map<Store, Object?>.of(_pendingNotify);
+        _pendingNotify.clear();
+        for (final e in notifies.entries) {
+          notifyStore(e.key, e.value);
+        }
+      });
+    } finally {
+      _draining = false;
+    }
   }
 
   /// Subscribe to [store] updates **in this scope only**.
@@ -98,22 +178,6 @@ final class Scope {
       }
     }
   }
-
-  /// Recompute derived stores that depend on [source] inside this scope.
-  void recomputeDependents(Store source) {
-    for (final derived in source.dependents) {
-      if (!derived.hasCompute) continue;
-      final next = derived.computeValue();
-      final prev = contains(derived)
-          ? _values[derived]
-          : derived.globalState;
-      if (identical(prev, next) || prev == next) continue;
-      writeValue(derived, next);
-      notifyStore(derived, next);
-      recomputeDependents(derived);
-    }
-  }
-
 
   int beginEffect(Effect effect) {
     final gen = (_effectGen[effect] ?? 0) + 1;
@@ -155,7 +219,20 @@ final class Scope {
     _effectGen.clear();
     _effectInflight.clear();
     _changed.clear();
+    _pendingRecompute.clear();
+    _pendingNotify.clear();
+    _drain = null;
   }
+}
+
+/// One Notifiable per [Scope] so Kernel `_dirtyStores` dedups scoped work
+/// the same way it dedups global `combine` recomputers.
+final class _ScopeDrain implements Notifiable {
+  _ScopeDrain(this._scope);
+  final Scope _scope;
+
+  @override
+  void notifySubscribers() => _scope._drainPending();
 }
 
 void _seedValues(Scope scope, Object? values) {
@@ -235,20 +312,19 @@ Map<String, dynamic> serialize(
 /// Seed an existing scope from a sid→value map. Prefer `fork(values: map)`.
 void hydrate(Scope scope, Map<String, dynamic> values) {
   if (scope.isDisposed) throw StateError('Cannot hydrate a disposed scope');
-  for (final e in values.entries) {
-    final store = Store.bySid(e.key);
-    if (store == null) continue;
-    final prev = scope.contains(store)
-        ? scope._values[store]
-        : store.globalState;
-    if (identical(prev, e.value) || prev == e.value) continue;
-    scope.writeValue(store, e.value);
-    scope.notifyStore(store, e.value);
-    Kernel.instance.runInScope(
-      scope,
-      () => scope.recomputeDependents(store),
-    );
-  }
+  Kernel.instance.batch(() {
+    for (final e in values.entries) {
+      final store = Store.bySid(e.key);
+      if (store == null) continue;
+      final prev = scope.contains(store)
+          ? scope._values[store]
+          : store.globalState;
+      if (identical(prev, e.value) || prev == e.value) continue;
+      scope.writeValue(store, e.value);
+      scope.queueNotify(store, e.value);
+      scope.queueDependentRecompute(store);
+    }
+  });
 }
 
 /// Run [unit] optionally inside [scope], waiting for effects to settle.
