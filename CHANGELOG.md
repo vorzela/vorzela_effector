@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+### Changed
+- **`UnitBuilder` / `MultiUnitBuilder`** — documented rebuild locality (each
+  builder only `setState`s for its own unit). Added `UnitBuilder.withChild` /
+  `MultiUnitBuilder.withChild` so nested / static subtrees stay in the
+  `child:` slot and are not rebuilt when the parent store updates.
+
 ## 0.1.3
 
 ### Fixed

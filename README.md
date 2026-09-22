@@ -65,6 +65,19 @@ UnitBuilder<int>(
 );
 ```
 
+Each `UnitBuilder` only `setState`s for **its** store. Sibling builders
+watching other stores do not rebuild. For nested UI, use
+`UnitBuilder.withChild` so nested builders are the `child:` slot (not
+recreated inside the parent builder):
+
+```dart
+UnitBuilder.withChild(
+  unit: $header,
+  builder: (context, h, child) => Column(children: [Text('$h'), child!]),
+  child: UnitBuilder(unit: $body, builder: (_, b) => Text('$b')),
+);
+```
+
 Typed events: `createEvent<String>()`. Async: `createEffect<P, D>(...)`.
 
 ---

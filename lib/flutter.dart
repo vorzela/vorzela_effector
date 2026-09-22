@@ -22,15 +22,48 @@ void Function([dynamic params]) bindOf(BuildContext context, Object unit) =>
     bind(context, unit);
 
 /// Rebuild when [unit] changes. Uses [ScopeProvider] when present.
+///
+/// Each [UnitBuilder] subscribes only to its own [unit] — siblings watching
+/// other stores do **not** [setState] when this one updates.
+///
+/// ```dart
+/// Column(children: [
+///   UnitBuilder(unit: $cart, builder: (_, c) => Text('$c')),
+///   UnitBuilder(unit: $user, builder: (_, u) => Text('$u')),
+/// ])
+/// ```
+///
+/// For nested builders, use [UnitBuilder.withChild] so the nested subtree is
+/// passed as [child] and is not recreated inside the parent's builder
+/// (same idea as [ListenableBuilder]):
+///
+/// ```dart
+/// UnitBuilder.withChild(
+///   unit: $header,
+///   builder: (context, h, child) => Column(children: [Text('$h'), child!]),
+///   child: UnitBuilder(unit: $body, builder: (_, b) => Text('$b')),
+/// )
+/// ```
 class UnitBuilder<T> extends StatefulWidget {
-  const UnitBuilder({
+  UnitBuilder({
     super.key,
     required this.unit,
-    required this.builder,
-  });
+    required Widget Function(BuildContext context, T value) builder,
+    this.child,
+  }) : _builder = ((context, value, _) => builder(context, value));
+
+  /// Like [UnitBuilder], but [builder] receives the optional [child] slot.
+  UnitBuilder.withChild({
+    super.key,
+    required this.unit,
+    required Widget Function(BuildContext context, T value, Widget? child)
+        builder,
+    this.child,
+  }) : _builder = builder;
 
   final Store<T> unit;
-  final Widget Function(BuildContext context, T value) builder;
+  final Widget? child;
+  final Widget Function(BuildContext context, T value, Widget? child) _builder;
 
   @override
   State<UnitBuilder<T>> createState() => _UnitBuilderState<T>();
@@ -84,19 +117,32 @@ class _UnitBuilderState<T> extends State<UnitBuilder<T>> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.builder(context, _value);
+  Widget build(BuildContext context) =>
+      widget._builder(context, _value, widget.child);
 }
 
 /// Watch multiple stores; rebuild when any changes (respects [ScopeProvider]).
+///
+/// Same rebuild locality as [UnitBuilder]: only this widget [setState]s when
+/// one of [units] fires — siblings watching other stores are untouched.
 class MultiUnitBuilder extends StatefulWidget {
-  const MultiUnitBuilder({
+  MultiUnitBuilder({
     super.key,
     required this.units,
-    required this.builder,
-  });
+    required Widget Function(BuildContext context) builder,
+    this.child,
+  }) : _builder = ((context, _) => builder(context));
+
+  MultiUnitBuilder.withChild({
+    super.key,
+    required this.units,
+    required Widget Function(BuildContext context, Widget? child) builder,
+    this.child,
+  }) : _builder = builder;
 
   final List<Store> units;
-  final Widget Function(BuildContext context) builder;
+  final Widget? child;
+  final Widget Function(BuildContext context, Widget? child) _builder;
 
   @override
   State<MultiUnitBuilder> createState() => _MultiUnitBuilderState();
@@ -151,7 +197,8 @@ class _MultiUnitBuilderState extends State<MultiUnitBuilder> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.builder(context);
+  Widget build(BuildContext context) =>
+      widget._builder(context, widget.child);
 }
 
 /// Button/InkWell helper that fires [unit] inside the nearest [ScopeProvider].
