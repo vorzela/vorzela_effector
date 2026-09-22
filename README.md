@@ -226,9 +226,9 @@ You can still mix: `UnitBuilder` for store UI + normal `State` for animation onl
 | `combine(stores, fn, {name})` | `Store<R>` | Derived from list of stores |
 | `combine2(a, b, fn, {name})` | `Store<R>` | Two-store combine |
 | `combine3(a, b, c, fn, {name})` | `Store<R>` | Three-store combine |
-| `fork()` | `Scope` | Isolated scope |
-| `allSettled(unit, {scope, params})` | `Future<void>` | Run event/effect and flush |
-| `scopeBind(unit, {scope})` | `Function` | Bind call to a scope |
+| `fork({values})` | `Scope` | Isolated scope (optional value seeds) |
+| `allSettled(unit, {scope, params})` | `Future<void>` | Run event/effect (optionally in scope) |
+| `scopeBind(unit, {scope})` | `Function` | Bind call to always run in a scope |
 | `isStore` / `isEvent` / `isEffect` | `bool` | Type guards |
 | `Kernel.instance.batch(fn)` | — | Coalesce nested updates |
 
@@ -280,12 +280,24 @@ You can still mix: `UnitBuilder` for store UI + normal `State` for animation onl
 
 ### `Scope`
 
+Isolated store-value bag for tests / SSR-style forks (Effector `fork` subset).
+
 | Member | Description |
 |--------|-------------|
+| `fork({values})` | Create scope; `values: [($store, v), …]` seeds overrides |
+| `getState` / `setState` | Scoped store access (never mutates global) |
 | `own(unit)` | Dispose unit with scope |
-| `getState` / `setState` | Scoped store access |
 | `dispose()` | Dispose owned units |
 | `isDisposed` | |
+
+`allSettled(unit, {scope})` and `scopeBind(unit, {scope})` run the unit inside
+that scope: leaf store `.on` / `write` / `sample` updates go into the scope bag
+and leave `store.getState()` unchanged.
+
+**Not Effector-complete yet:** no `serialize`/`hydrate`, no effect `handlers:`
+overrides, derived `.map`/`combine` stores are not graph-cloned, scoped writes
+do not notify global `watch`/`UnitBuilder`, and overlapping concurrent
+`allSettled` on different scopes on one isolate is unsafe (run sequentially).
 
 ### `Subscription`
 

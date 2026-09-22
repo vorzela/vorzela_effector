@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.7
+
+### Fixed (Scope / fork audit)
+- **`allSettled` / `scopeBind` ignored `scope`** — they always mutated global
+  units. They now run inside `Kernel.runInScope` / `runInScopeAsync` so leaf
+  store updates stay in the fork (Effector’s basic two-scope example works).
+- **`Store.on` reducers read `_state` directly** — under a scope they now use
+  `getState()`, so forked values are visible to reducers.
+- **Scoped `_set`** writes the scope bag only (no global mutate, no global
+  notify leak).
+
+### Added
+- **`fork(values: [($store, value), …])`** — seed overrides at creation.
+- **`Store.globalState`** — unscoped introspection when needed.
+- **`Kernel.currentScope` / `runInScope` / `runInScopeAsync`**.
+
+### Docs
+- README documents what Scope is *not* yet (serialize, handlers, derived
+  graph clone, concurrent overlapping scopes).
+
 ## 0.0.6
 
 ### Fixed

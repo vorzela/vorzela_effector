@@ -1,4 +1,6 @@
 import 'event.dart';
+import 'kernel.dart';
+import 'scope.dart';
 import 'unit.dart';
 
 typedef Reducer<T, P> = T Function(T state, P payload);
@@ -21,13 +23,24 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
   final bool _derived;
   final UpdateFilter<T>? updateFilter;
 
-  T getState() => _state;
+  /// Current value — respects [Kernel.currentScope] when inside
+  /// [allSettled] / [scopeBind] / [Kernel.runInScope].
+  T getState() {
+    final scope = Kernel.instance.currentScope;
+    if (scope is Scope && scope.contains(this)) {
+      return scope.read<T>(this);
+    }
+    return _state;
+  }
 
   /// Current value (alias of [getState] for Effector familiarity).
-  T get value => _state;
+  T get value => getState();
 
   /// Constructor default — Effector-style reset target when [reset]'s [to] is omitted.
   T get defaultState => _initial;
+
+  /// Global (unscoped) value — for rare introspection; prefer [getState].
+  T get globalState => _state;
 
   bool get isDerived => _derived;
 
@@ -37,7 +50,8 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
       throw StateError('Cannot .on() a derived store');
     }
     final sub = event.to((payload) {
-      final next = reducer(_state, payload);
+      // Must use getState() so reducers see forked values under a Scope.
+      final next = reducer(getState(), payload);
       _set(next);
     });
     attachLinks([sub]);
@@ -60,6 +74,20 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
 
   void _set(T next) {
     if (isDisposed) return;
+    final active = Kernel.instance.currentScope;
+    if (active is Scope) {
+      final prev =
+          active.contains(this) ? active.read<T>(this) : _state;
+      if (updateFilter != null) {
+        if (!updateFilter!(prev, next)) return;
+      } else if (identical(prev, next) || prev == next) {
+        return;
+      }
+      // Forked write: bag only — do not mutate global `_state` or notify
+      // global watchers (that would leak the fork into the live UI tree).
+      active.writeValue(this, next);
+      return;
+    }
     if (updateFilter != null) {
       if (!updateFilter!(_state, next)) return;
     } else if (identical(_state, next) || _state == next) {

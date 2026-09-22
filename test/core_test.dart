@@ -198,6 +198,54 @@ void main() {
     expect($s.getState(), 0);
   });
 
+  test('allSettled with scope isolates store updates (Effector fork)', () async {
+    final $counter = createStore(0);
+    final inc = createEvent();
+    final dec = createEvent();
+    $counter.on(inc, (v, _) => v + 1);
+    $counter.on(dec, (v, _) => v - 1);
+
+    final scopeA = fork();
+    final scopeB = fork();
+
+    await allSettled(inc, scope: scopeA);
+    await allSettled(dec, scope: scopeB);
+
+    expect($counter.getState(), 0);
+    expect(scopeA.getState($counter), 1);
+    expect(scopeB.getState($counter), -1);
+  });
+
+  test('fork(values:) seeds scope overrides', () {
+    final $user = createStore('guest');
+    final scope = fork(values: [($user, 'alice')]);
+    expect(scope.getState($user), 'alice');
+    expect($user.getState(), 'guest');
+  });
+
+  test('scopeBind runs events inside the bound scope', () {
+    final $n = createStore(0);
+    final bump = createEvent();
+    $n.on(bump, (s, _) => s + 1);
+
+    final scope = fork();
+    final bound = scopeBind(bump, scope: scope);
+    bound();
+    bound();
+
+    expect(scope.getState($n), 2);
+    expect($n.getState(), 0);
+  });
+
+  test('allSettled without scope still mutates the global store', () async {
+    final $n = createStore(0);
+    final bump = createEvent();
+    $n.on(bump, (s, _) => s + 1);
+
+    await allSettled(bump);
+    expect($n.getState(), 1);
+  });
+
   test('sample link is torn down when target is disposed', () {
     final clock = createEvent();
     final target = createEventTyped<int>();

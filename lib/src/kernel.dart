@@ -22,6 +22,42 @@ final class Kernel {
   final Queue<VoidCallback> _queue = Queue<VoidCallback>();
   final Set<Object> _dirtyStores = {};
 
+  /// Active scope object for [runInScope] / [runInScopeAsync].
+  ///
+  /// Typed as [Object] to avoid a kernel↔scope import cycle; callers pass a
+  /// [Scope]. [Store] checks `is Scope` when reading/writing.
+  ///
+  /// Not safe to interleave overlapping async scopes on the same isolate —
+  /// run scoped work sequentially, or use [scopeBind] per callback.
+  Object? _currentScope;
+
+  Object? get currentScope => _currentScope;
+
+  /// Run [fn] with [scope] as [currentScope] (nested calls stack).
+  R runInScope<R>(Object scope, R Function() fn) {
+    final prev = _currentScope;
+    _currentScope = scope;
+    try {
+      return fn();
+    } finally {
+      _currentScope = prev;
+    }
+  }
+
+  /// Like [runInScope] but keeps the scope across `await`s inside [fn].
+  Future<R> runInScopeAsync<R>(
+    Object scope,
+    Future<R> Function() fn,
+  ) async {
+    final prev = _currentScope;
+    _currentScope = scope;
+    try {
+      return await fn();
+    } finally {
+      _currentScope = prev;
+    }
+  }
+
   /// Run [fn] inside a single graph flush (nested calls coalesce).
   void batch(VoidCallback fn) {
     if (_flushing) {
