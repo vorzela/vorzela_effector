@@ -11,18 +11,19 @@ final class Store<T> extends Unit with Subscribable<T>, DeferredNotify<T> {
   Store(
     T initial, {
     super.name,
-    this.sid,
+    String? sid,
     this.updateFilter,
     bool derived = false,
-  })  : _state = initial,
+  })  : sid = sid ?? name,
+        _state = initial,
         _initial = initial,
         _derived = derived {
-    if (sid != null) {
-      _sidRegistry[sid!] = this;
+    if (this.sid != null) {
+      _sidRegistry[this.sid!] = this;
     }
   }
 
-  /// Stable id for [serialize] / [hydrate] (Effector SID). Required for SSR.
+  /// Stable id for [serialize] (Effector SID). Defaults to [name] when omitted.
   final String? sid;
 
   T _state;

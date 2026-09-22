@@ -29,13 +29,13 @@ typedef EffectHandler<P, D> = FutureOr<D> Function(P params);
 /// cancel each other — required for ecommerce parallel fetches.
 final class Effect<P, D> extends Unit with Subscribable<P> {
   Effect(this._handler, {super.name}) {
-    done = createEventTyped<EffectDone<P, D>>(
+    done = createEvent<EffectDone<P, D>>(
       name: name == null ? null : '$name.done',
     );
-    fail = createEventTyped<EffectFail<P>>(
+    fail = createEvent<EffectFail<P>>(
       name: name == null ? null : '$name.fail',
     );
-    finally_ = createEventTyped<P>(
+    finally_ = createEvent<P>(
       name: name == null ? null : '$name.finally',
     );
     $pending = createStore<bool>(

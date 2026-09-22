@@ -5,11 +5,6 @@ import 'unit.dart';
 final class Event<T> extends Unit with Subscribable<T> {
   Event({super.name});
 
-  // Slot-wrapped (not a bare `List<Function>`) for the same reason `watch()`
-  // uses slots in Subscribable: `List.remove(handler)` matches by equality
-  // and always removes the *first* match, so registering the same handler
-  // (e.g. a top-level function or tear-off) via `.to()` more than once could
-  // make unsubscribing one Subscription silently detach a *different* one.
   final List<_HandlerSlot<T>> _handlerSlots = [];
   int _handlerLiveCount = 0;
 
@@ -30,9 +25,6 @@ final class Event<T> extends Unit with Subscribable<T> {
     if (isDisposed) return;
     final T value = payload as T;
     Kernel.instance.batch(() {
-      // Snapshot indices (not a copy of every slot) so a handler that
-      // unsubscribes mid-fire is respected without extra allocation —
-      // same trick as [Subscribable.notify].
       final len = _handlerSlots.length;
       for (var i = 0; i < len; i++) {
         final slot = _handlerSlots[i];
@@ -44,9 +36,6 @@ final class Event<T> extends Unit with Subscribable<T> {
   }
 
   void _compactHandlersIfNeeded() {
-    // Match Subscribable: only pay for compaction once enough dead slots
-    // have accumulated. Hot events with a few live `.to()` handlers must
-    // not `removeWhere` on every fire.
     if (_handlerSlots.length > 16 &&
         _handlerLiveCount * 2 < _handlerSlots.length) {
       _handlerSlots.removeWhere((s) => s.removed);
@@ -55,10 +44,6 @@ final class Event<T> extends Unit with Subscribable<T> {
 
   @override
   void onDispose() {
-    // Release closures held by `.to()` handlers too — previously only the
-    // `watch()` list (via Subscribable.onDispose) was cleared, so a disposed
-    // Event still pinned every `.to()` handler closure (and whatever they
-    // captured) in memory forever.
     _handlerSlots.clear();
     _handlerLiveCount = 0;
     super.onDispose();
@@ -71,9 +56,14 @@ final class _HandlerSlot<T> {
   bool removed = false;
 }
 
-/// Void-payload event helper.
-Event<void> createEvent({String? name}) => Event<void>(name: name);
+/// Create an event.
+///
+/// Void: `createEvent()` · Typed: `createEvent<String>()`.
+Event<T> createEvent<T extends Object?>({String? name}) =>
+    Event<T>(name: name);
 
-Event<T> createEventTyped<T>({String? name}) => Event<T>(name: name);
+/// Compatibility alias — prefer [createEvent].
+@Deprecated('Use createEvent<T>() instead')
+Event<T> createEventTyped<T>({String? name}) => createEvent<T>(name: name);
 
 bool isEvent(Object? u) => u is Event;

@@ -16,7 +16,7 @@ void main() {
 
   test('reset() restores constructor initial, not state at wiring time', () {
     final $s = createStore(0);
-    final set = createEventTyped<int>();
+    final set = createEvent<int>();
     final clear = createEvent();
     $s.on(set, (_, v) => v);
 
@@ -36,7 +36,7 @@ void main() {
 
   test('reset(clock, to) uses the explicit value', () {
     final $s = createStore('a');
-    final set = createEventTyped<String>();
+    final set = createEvent<String>();
     final clear = createEvent();
     $s.on(set, (_, v) => v);
     $s.reset(clear, 'z');
@@ -48,7 +48,7 @@ void main() {
 
   test('watch notifies subscribers', () {
     final $n = createStore(0);
-    final set = createEventTyped<int>();
+    final set = createEvent<int>();
     $n.on(set, (_, v) => v);
 
     final seen = <int>[];
@@ -76,8 +76,8 @@ void main() {
   test('combine2 derives from two stores', () {
     final $a = createStore(1);
     final $b = createStore(2);
-    final setA = createEventTyped<int>();
-    final setB = createEventTyped<int>();
+    final setA = createEvent<int>();
+    final setB = createEvent<int>();
     $a.on(setA, (_, v) => v);
     $b.on(setB, (_, v) => v);
     final $sum = combine2($a, $b, (a, b) => a + b);
@@ -91,7 +91,7 @@ void main() {
     final $form = createStore('hello');
     final submit = createEvent();
     final saved = <String>[];
-    final save = createEventTyped<String>();
+    final save = createEvent<String>();
     save.to(saved.add);
 
     sample(
@@ -180,7 +180,7 @@ void main() {
 
   test('store dispose unsubscribes watchers', () {
     final $s = createStore(0);
-    final set = createEventTyped<int>();
+    final set = createEvent<int>();
     $s.on(set, (_, v) => v);
     var calls = 0;
     $s.watch((_) => calls++);
@@ -248,7 +248,7 @@ void main() {
 
   test('sample link is torn down when target is disposed', () {
     final clock = createEvent();
-    final target = createEventTyped<int>();
+    final target = createEvent<int>();
     final seen = <int>[];
     target.to(seen.add);
 
@@ -283,8 +283,8 @@ void main() {
   test('combine recomputes once per batch', () {
     final $a = createStore(1);
     final $b = createStore(2);
-    final setA = createEventTyped<int>();
-    final setB = createEventTyped<int>();
+    final setA = createEvent<int>();
+    final setB = createEvent<int>();
     $a.on(setA, (_, v) => v);
     $b.on(setB, (_, v) => v);
 
@@ -308,7 +308,7 @@ void main() {
 
   test('unsubscribe is identity-based for duplicate listeners', () {
     final $s = createStore(0);
-    final set = createEventTyped<int>();
+    final set = createEvent<int>();
     $s.on(set, (_, v) => v);
 
     void listener(int _) {}
@@ -323,7 +323,7 @@ void main() {
 
   test('nested combine settles in the same flush', () {
     final $a = createStore(1);
-    final setA = createEventTyped<int>();
+    final setA = createEvent<int>();
     $a.on(setA, (_, v) => v);
 
     final $doubled = combine([$a], (vals) => (vals[0] as int) * 2);
@@ -337,7 +337,7 @@ void main() {
 
   test('kernel fails fast on runaway self-update loop', () {
     final $s = createStore(0);
-    final bump = createEventTyped<int>();
+    final bump = createEvent<int>();
     $s.on(bump, (_, v) => v);
     // Watcher writes the same store → unbounded dirty cascade.
     final sub = $s.watch((v) {
@@ -372,7 +372,7 @@ void main() {
   });
 
   test('Event.to() unsubscribe is identity-based for duplicate handlers', () {
-    final e = createEventTyped<int>();
+    final e = createEvent<int>();
     final seen = <int>[];
     void handler(int v) => seen.add(v);
 
@@ -394,8 +394,8 @@ void main() {
   test('disposing one sample() list-target does not silently mute the others',
       () {
     final clock = createEvent();
-    final a = createEventTyped<int>();
-    final b = createEventTyped<int>();
+    final a = createEvent<int>();
+    final b = createEvent<int>();
     final seenA = <int>[];
     final seenB = <int>[];
     a.to(seenA.add);
@@ -415,7 +415,7 @@ void main() {
 
   test('readSource accepts null entries in list/map sources', () {
     final clock = createEvent();
-    final out = createEventTyped<dynamic>();
+    final out = createEvent<dynamic>();
     final seen = <dynamic>[];
     out.to(seen.add);
 
@@ -431,7 +431,7 @@ void main() {
 
     final clock2 = createEvent();
     final seen2 = <dynamic>[];
-    final out2 = createEventTyped<dynamic>();
+    final out2 = createEvent<dynamic>();
     out2.to(seen2.add);
     sample(
       clock: clock2,

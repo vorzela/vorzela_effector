@@ -7,7 +7,7 @@ void main() {
   test('overlapping concurrent allSettled on different scopes stay isolated',
       () async {
     final $n = createStore(0, sid: 'n');
-    final bump = createEventTyped<int>();
+    final bump = createEvent<int>();
     $n.on(bump, (s, v) => s + v);
 
     final scopeA = fork();
@@ -37,7 +37,7 @@ void main() {
       () async {
     final $price = createStore(10, sid: 'price');
     final $qty = createStore(2, sid: 'qty');
-    final setPrice = createEventTyped<int>();
+    final setPrice = createEvent<int>();
     $price.on(setPrice, (_, v) => v);
 
     final $line = $price.map((p) => p * 2, sid: 'line');
@@ -104,7 +104,7 @@ void main() {
 
   test('serialize / hydrate round-trip with sid', () async {
     final $cart = createStore(0, sid: 'cart.count');
-    final add = createEventTyped<int>();
+    final add = createEvent<int>();
     $cart.on(add, (s, v) => s + v);
 
     final server = fork();
@@ -120,17 +120,17 @@ void main() {
     expect($cart.getState(), 0);
   });
 
-  test('fork(valuesMap:) seeds by sid', () {
+  test('fork(values: map) seeds by sid', () {
     final $user = createStore('guest', sid: 'user');
-    final scope = fork(valuesMap: {'user': 'alice'});
+    final scope = fork(values: {'user': 'alice'});
     expect(scope.getState($user), 'alice');
   });
 
   test('ecommerce: parallel catalog + cart scopes do not leak', () async {
     final $items = createStore(<String>[], sid: 'catalog.items');
     final $cart = createStore(<String>[], sid: 'cart.lines');
-    final setItems = createEventTyped<List<String>>();
-    final addLine = createEventTyped<String>();
+    final setItems = createEvent<List<String>>();
+    final addLine = createEvent<String>();
     $items.on(setItems, (_, v) => v);
     $cart.on(addLine, (s, v) => [...s, v]);
 
@@ -167,7 +167,7 @@ void main() {
 
   test('reset inside a scope restores defaultState in that scope only', () async {
     final $n = createStore(0, sid: 'n.reset');
-    final set = createEventTyped<int>();
+    final set = createEvent<int>();
     final clear = createEvent();
     $n.on(set, (_, v) => v);
     $n.reset(clear);

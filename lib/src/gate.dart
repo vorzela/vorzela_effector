@@ -4,7 +4,7 @@ import 'store.dart';
 /// Effector-react style Gate — open on mount, close on unmount (auto lifecycle).
 final class Gate<T> {
   Gate({this.name}) {
-    open = createEventTyped<T>(name: name == null ? null : '$name.open');
+    open = createEvent<T>(name: name == null ? null : '$name.open');
     close = createEvent(name: name == null ? null : '$name.close');
     $status = createStore<bool>(false, name: name == null ? null : '$name.status');
     $status.on(open, (_, __) => true);

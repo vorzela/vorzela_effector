@@ -136,6 +136,10 @@ final class Scope {
     _effectInflight[effect] = 0;
   }
 
+  /// Serialize this scope's store values keyed by [Store.sid].
+  Map<String, dynamic> serialize({bool onlyChanges = true}) =>
+      serializeScope(this, onlyChanges: onlyChanges);
+
   void own(Unit unit) => _owned.add(unit);
 
   void dispose() {
@@ -154,27 +158,44 @@ final class Scope {
   }
 }
 
-/// Create an isolated scope (Effector `fork`).
-///
-/// [values] — `($store, value)` tuples and/or a sid→value [Map].
-/// [handlers] — `(effect, mockHandler)` overrides for this scope only.
-Scope fork({
-  List<(Store, Object?)>? values,
-  Map<String, dynamic>? valuesMap,
-  List<(Effect, Function)>? handlers,
-}) {
-  final scope = Scope._();
-  if (values != null) {
-    for (final (store, value) in values) {
-      scope.writeValue(store, value);
-    }
-  }
-  if (valuesMap != null) {
-    for (final e in valuesMap.entries) {
-      final store = Store.bySid(e.key);
+void _seedValues(Scope scope, Object? values) {
+  if (values == null) return;
+  if (values is Map) {
+    for (final e in values.entries) {
+      final store = Store.bySid(e.key.toString());
       if (store != null) scope.writeValue(store, e.value);
     }
+    return;
   }
+  if (values is List) {
+    for (final item in values) {
+      if (item case (Store store, Object? value)) {
+        scope.writeValue(store, value);
+      } else {
+        throw ArgumentError(
+          'fork values list entries must be (Store, value) records',
+        );
+      }
+    }
+    return;
+  }
+  throw ArgumentError(
+    'fork values: must be List<(Store, value)> or Map<String, dynamic>',
+  );
+}
+
+/// Create an isolated scope (Effector `fork`).
+///
+/// [values] — either `List<(Store, value)>` or `Map<String, dynamic>` (by sid).
+/// [handlers] — `(effect, mockHandler)` overrides for this scope only.
+Scope fork({
+  Object? values,
+  List<(Effect, Function)>? handlers,
+  @Deprecated('Pass a Map to values:') Map<String, dynamic>? valuesMap,
+}) {
+  final scope = Scope._();
+  _seedValues(scope, values);
+  if (valuesMap != null) _seedValues(scope, valuesMap);
   if (handlers != null) {
     for (final (effect, handler) in handlers) {
       scope._setHandler(effect, handler);
@@ -184,10 +205,7 @@ Scope fork({
 }
 
 /// Serialize scoped store values keyed by [Store.sid].
-///
-/// Stores without a `sid` are skipped. With [onlyChanges] (default true),
-/// only values written in this scope are included.
-Map<String, dynamic> serialize(
+Map<String, dynamic> serializeScope(
   Scope scope, {
   bool onlyChanges = true,
 }) {
@@ -207,7 +225,14 @@ Map<String, dynamic> serialize(
   return out;
 }
 
-/// Apply serialized (or sid-keyed) values into [scope].
+/// Compatibility — prefer [Scope.serialize].
+Map<String, dynamic> serialize(
+  Scope scope, {
+  bool onlyChanges = true,
+}) =>
+    serializeScope(scope, onlyChanges: onlyChanges);
+
+/// Seed an existing scope from a sid→value map. Prefer `fork(values: map)`.
 void hydrate(Scope scope, Map<String, dynamic> values) {
   if (scope.isDisposed) throw StateError('Cannot hydrate a disposed scope');
   for (final e in values.entries) {

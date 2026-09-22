@@ -22,7 +22,7 @@ void main() {
                 builder: (context, v) => Text('count=$v'),
               ),
               floatingActionButton: FloatingActionButton(
-                onPressed: bindOf(context, inc),
+                onPressed: bind(context, inc),
                 child: const Icon(Icons.add),
               ),
             ),
@@ -62,7 +62,7 @@ void main() {
                         builder: (_, v) => Text('a=$v'),
                       ),
                       TextButton(
-                        onPressed: bindOf(context, bump),
+                        onPressed: bind(context, bump),
                         child: const Text('bumpA'),
                       ),
                     ],
@@ -81,7 +81,7 @@ void main() {
                         builder: (_, v) => Text('b=$v'),
                       ),
                       TextButton(
-                        onPressed: bindOf(context, bump),
+                        onPressed: bind(context, bump),
                         child: const Text('bumpB'),
                       ),
                     ],
@@ -104,5 +104,67 @@ void main() {
     expect(find.text('a=1'), findsOneWidget);
     expect(find.text('b=1'), findsOneWidget);
     expect($n.getState(), 0);
+  });
+
+
+  testWidgets('ScopeProvider auto-forks when scope is omitted', (tester) async {
+    final $n = createStore(0, name: 'auto.n');
+    final bump = createEvent();
+    $n.on(bump, (s, _) => s + 1);
+
+    await tester.pumpWidget(
+      ScopeProvider(
+        child: MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: UnitBuilder<int>(
+                unit: $n,
+                builder: (_, v) => Text('n=$v'),
+              ),
+              floatingActionButton: FloatingActionButton(
+                onPressed: bind(context, bump),
+                child: const Icon(Icons.add),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pump();
+    expect(find.text('n=1'), findsOneWidget);
+    expect($n.getState(), 0);
+  });
+
+  testWidgets('UnitAction fires inside ScopeProvider', (tester) async {
+    final $n = createStore(0);
+    final bump = createEvent();
+    $n.on(bump, (s, _) => s + 1);
+    final scope = fork();
+
+    await tester.pumpWidget(
+      ScopeProvider(
+        scope: scope,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                UnitBuilder<int>(
+                  unit: $n,
+                  builder: (_, v) => Text('x=$v'),
+                ),
+                UnitAction(unit: bump, child: const Text('go')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('go'));
+    await tester.pump();
+    expect(find.text('x=1'), findsOneWidget);
+    expect(scope.getState($n), 1);
   });
 }

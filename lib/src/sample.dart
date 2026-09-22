@@ -78,7 +78,7 @@ Object sample({
     sink = target;
     createdEvent = null;
   } else {
-    createdEvent = createEventTyped(name: name);
+    createdEvent = createEvent(name: name);
     sink = createdEvent;
   }
 

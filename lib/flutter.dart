@@ -12,9 +12,14 @@ export 'src/flutter/auto_dispose.dart';
 import 'src/flutter/scope_provider.dart';
 export 'src/flutter/scope_provider.dart';
 
-/// Bind [unit] to the [ScopeProvider] above [context] (use for onPressed).
-void Function([dynamic params]) bindOf(BuildContext context, Object unit) =>
+/// Bind [unit] to the nearest [ScopeProvider] (use for `onPressed`).
+void Function([dynamic params]) bind(BuildContext context, Object unit) =>
     scopeBind(unit, scope: ScopeProvider.of(context));
+
+/// Compatibility alias for [bind].
+@Deprecated('Use bind(context, unit)')
+void Function([dynamic params]) bindOf(BuildContext context, Object unit) =>
+    bind(context, unit);
 
 /// Rebuild when [unit] changes. Uses [ScopeProvider] when present.
 class UnitBuilder<T> extends StatefulWidget {
@@ -147,6 +152,32 @@ class _MultiUnitBuilderState extends State<MultiUnitBuilder> {
 
   @override
   Widget build(BuildContext context) => widget.builder(context);
+}
+
+/// Button/InkWell helper that fires [unit] inside the nearest [ScopeProvider].
+///
+/// Prefer this over remembering `bind(context, event)` vs bare `event()`.
+class UnitAction extends StatelessWidget {
+  const UnitAction({
+    super.key,
+    required this.unit,
+    this.params,
+    required this.child,
+  });
+
+  final Object unit;
+  final dynamic params;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final run = bind(context, unit);
+    return GestureDetector(
+      onTap: () => run(params),
+      behavior: HitTestBehavior.opaque,
+      child: child,
+    );
+  }
 }
 
 /// Opens [gate] on mount with optional [props], closes on dispose.

@@ -68,7 +68,7 @@ void main() {
   testWidgets('bindText syncs store without stacking subscribers',
       (tester) async {
     final $name = createStore('');
-    final setName = createEventTyped<String>();
+    final setName = createEvent<String>();
     $name.on(setName, (_, v) => v);
 
     var tick = 0;
@@ -118,7 +118,7 @@ void main() {
 
   testWidgets('StoreTextField accepts event shorthand', (tester) async {
     final $email = createStore('');
-    final setEmail = createEventTyped<String>();
+    final setEmail = createEvent<String>();
     $email.on(setEmail, (_, v) => v);
 
     await tester.pumpWidget(
